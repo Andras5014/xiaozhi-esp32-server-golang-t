@@ -30,6 +30,8 @@ const (
 	TtsTypeEdge         = "edge"
 	TtsTypeEdgeOffline  = "edge_offline"
 	TtsTypeXiaozhi      = "xiaozhi"
+	TtsTypeXunfei       = "xunfei"
+	TtsTypeXunfeiSuper  = "xunfei_super_tts"
 	TtsTypeOpenAI       = "openai"
 	TtsTypeZhipu        = "zhipu"
 	TtsTypeMinimax      = "minimax"
