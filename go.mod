@@ -89,6 +89,7 @@ require (
 	github.com/k2-fsa/sherpa-onnx-go-linux v1.12.4 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.12.4 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.12.4 // indirect
+	github.com/kardianos/service v1.2.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lestrrat-go/strftime v1.1.0 // indirect
