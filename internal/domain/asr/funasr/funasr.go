@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"xiaozhi-esp32-server-golang/constants"
 	log "xiaozhi-esp32-server-golang/logger"
 
 	"github.com/gorilla/websocket"
@@ -297,16 +298,15 @@ func (f *Funasr) recvResult(ctx context.Context, conn *websocket.Conn, resultCha
 			continue
 		}*/
 
+		streamingResult := f.toStreamingResult(response)
+
 		// 发送识别结果
 		select {
 		case <-ctx.Done():
 			// 上下文取消，退出goroutine
 			log.Debugf("funasr recvResult 已取消: %v", ctx.Err())
 			return
-		case resultChan <- types.StreamingResult{
-			Text:    response.Text,
-			IsFinal: response.IsFinal,
-		}:
+		case resultChan <- streamingResult:
 		}
 		/*if f.config.AutoEnd {
 			log.Debugf("funasr recvResult autoend")
@@ -314,11 +314,31 @@ func (f *Funasr) recvResult(ctx context.Context, conn *websocket.Conn, resultCha
 		}*/
 		// 结果发送成功
 		// 如果是最终结果且输入已结束，则退出循环
-		if response.IsFinal {
-			log.Debugf("funasr recvResult isfinal")
+		if streamingResult.IsFinal {
+			log.Debugf("funasr recvResult isfinal, response_mode=%s, raw_is_final=%v", response.Mode, response.IsFinal)
 			return
 		}
 	}
+}
+
+func (f *Funasr) toStreamingResult(response FunasrResponse) types.StreamingResult {
+	result := types.StreamingResult{
+		Text:    response.Text,
+		IsFinal: response.IsFinal,
+		AsrType: constants.AsrTypeFunAsr,
+		Mode:    response.Mode,
+	}
+
+	if strings.EqualFold(strings.TrimSpace(f.config.Mode), "2pass") {
+		switch strings.ToLower(strings.TrimSpace(response.Mode)) {
+		case "2pass-online":
+			result.IsFinal = false
+		case "2pass-offline":
+			result.IsFinal = true
+		}
+	}
+
+	return result
 }
 
 func (f *Funasr) forwardStreamAudio(ctx context.Context, cancelFunc context.CancelFunc, conn *websocket.Conn, audioStream <-chan []float32) {

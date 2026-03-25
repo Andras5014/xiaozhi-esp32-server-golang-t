@@ -9,10 +9,6 @@ import (
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
-const doubaoRetryableResponseCode = "45000081"
-const doubaoWaitingNextPacketTimeout = "waiting next packet timeout"
-const xunfeiRetryableResponseCode = "10008"
-
 type Asr struct {
 	lock sync.RWMutex
 	// ASR 上下文和通道
@@ -37,61 +33,13 @@ type Asr struct {
 
 	// 等待下一次检测到真实语音时再重启ASR，避免空转时持续重连上游
 	PendingRestartOnVoice bool
+
+	// 当前这轮ASR是否已经收到首个非空文本
+	ReceivedTextInTurn bool
 }
 
 func (a *Asr) Reset() {
 	a.AsrResult.Reset()
-}
-
-func isXunfeiRetryableError(err error) (string, bool) {
-	if err == nil {
-		return "", false
-	}
-
-	errText := err.Error()
-	if strings.Contains(errText, "xunfei asr error code="+xunfeiRetryableResponseCode) ||
-		strings.Contains(strings.ToLower(errText), "service instance invalid") {
-		return asr_types.RetryReasonXunfeiServiceInstanceInvalid, true
-	}
-
-	return "", false
-}
-
-func isDoubaoRetryableError(err error) (string, bool) {
-	if err == nil {
-		return "", false
-	}
-
-	errText := err.Error()
-	if strings.Contains(errText, doubaoRetryableResponseCode) {
-		return asr_types.RetryReasonNone, true
-	}
-
-	errTextLower := strings.ToLower(errText)
-	if strings.Contains(errTextLower, doubaoWaitingNextPacketTimeout) &&
-		strings.Contains(errTextLower, "session has ended") {
-		return asr_types.RetryReasonDoubaoWaitingNextPacketTimeout, true
-	}
-
-	return "", false
-}
-
-func isAliyunQwen3RetryableError(err error) (string, bool) {
-	if err == nil {
-		return "", false
-	}
-
-	errText := strings.ToLower(err.Error())
-	if strings.Contains(errText, "read message failed") &&
-		(strings.Contains(errText, "forcibly closed by the remote host") ||
-			strings.Contains(errText, "websocket: close 1006") ||
-			strings.Contains(errText, "connection reset by peer") ||
-			strings.Contains(errText, "broken pipe") ||
-			strings.Contains(errText, "unexpected eof")) {
-		return asr_types.RetryReasonAliyunQwen3ConnectionClosed, true
-	}
-
-	return "", false
 }
 
 func (a *Asr) RetireAsrResult(ctx context.Context) (asr_types.StreamingResult, bool, error) {
@@ -103,7 +51,6 @@ func (a *Asr) RetireAsrResult(ctx context.Context) (asr_types.StreamingResult, b
 
 	// 使用局部变量跟踪是否已发送首次字符事件
 	firstTextSent := false
-	lastAliyunText := ""
 	var emptyResult asr_types.StreamingResult
 
 	for {
@@ -111,38 +58,15 @@ func (a *Asr) RetireAsrResult(ctx context.Context) (asr_types.StreamingResult, b
 		case <-ctx.Done():
 			return emptyResult, false, nil
 		case result, ok := <-a.AsrResultChannel:
+			if !ok {
+				log.Debugf("asr result channel closed")
+				return emptyResult, true, nil
+			}
 			log.Debugf("asr result: %s, ok: %+v, isFinal: %+v, emptyReason: %s, error: %+v", result.Text, ok, result.IsFinal, result.EmptyReason, result.Error)
 			if result.Error != nil {
-				if a.AsrType == "doubao" {
-					if retryReason, ok := isDoubaoRetryableError(result.Error); ok {
-						if retryReason == asr_types.RetryReasonNone {
-							log.Warnf("doubao ASR 返回可重试错误(%s)，触发重试", doubaoRetryableResponseCode)
-							return emptyResult, true, nil
-						}
-						log.Warnf("doubao ASR 返回可恢复错误(%s)，触发重建: %v", retryReason, result.Error)
-						return asr_types.StreamingResult{
-							Error:       result.Error,
-							RetryReason: retryReason,
-						}, true, nil
-					}
-				}
-				if a.AsrType == "xunfei" {
-					if retryReason, ok := isXunfeiRetryableError(result.Error); ok {
-						log.Warnf("xunfei ASR 返回可恢复错误(%s)，触发重建: %v", retryReason, result.Error)
-						return asr_types.StreamingResult{
-							Error:       result.Error,
-							RetryReason: retryReason,
-						}, true, nil
-					}
-				}
-				if a.AsrType == "aliyun_qwen3" {
-					if retryReason, ok := isAliyunQwen3RetryableError(result.Error); ok {
-						log.Warnf("aliyun qwen3 ASR 连接被上游关闭，触发重建(%s): %v", retryReason, result.Error)
-						return asr_types.StreamingResult{
-							Error:       result.Error,
-							RetryReason: retryReason,
-						}, true, nil
-					}
+				if result.RetryReason != "" {
+					log.Warnf("ASR 返回可恢复错误(%s)，交由上层恢复: %v", result.RetryReason, result.Error)
+					return result, true, nil
 				}
 				return emptyResult, false, result.Error
 			}
@@ -154,61 +78,17 @@ func (a *Asr) RetireAsrResult(ctx context.Context) (asr_types.StreamingResult, b
 				a.ClientState.OnAsrFirstTextCallback(result.Text, result.IsFinal)
 			}
 
-			// 如果是 funasr 的流式模式（online），直接返回 IsFinal 中的文字
-			if a.AsrType == "funasr" {
-				if a.Mode == "2pass" || a.Mode == "online" {
-					//2pass模式下只处理 2pass-offline的结果
-					if result.Mode == "2pass-offline" {
-						if result.Text != "" {
-							a.AsrResult.WriteString(result.Text)
-						}
-					}
-				}
-				if a.Mode == "offline" {
-					return asr_types.StreamingResult{Text: result.Text, IsFinal: true}, true, nil
-				}
-
-				if a.AutoEnd || result.IsFinal {
-					return result, true, nil
-				}
-			} else if a.AsrType == "aliyun_funasr" {
-				if result.Text != "" {
-					if lastAliyunText == "" || strings.HasPrefix(result.Text, lastAliyunText) || strings.HasPrefix(lastAliyunText, result.Text) {
-						a.AsrResult.Reset()
-						a.AsrResult.WriteString(result.Text)
-					} else {
-						a.AsrResult.WriteString(result.Text)
-					}
-					lastAliyunText = result.Text
-				}
-				if a.AutoEnd || result.IsFinal {
-					result.Text = a.AsrResult.String()
-					return result, true, nil
-				}
-			} else if a.AsrType == "xunfei" {
+			if a.AsrType == "funasr" &&
+				strings.EqualFold(a.Mode, "2pass") &&
+				strings.EqualFold(result.Mode, "2pass-online") {
 				if result.IsFinal {
-					if result.Text == "" {
-						log.Debugf("xunfei ASR returned empty final result to client layer, emptyReason=%s", result.EmptyReason)
-					}
-					return result, true, nil
+					log.Debugf("funasr 2pass-online 结果误标 final，继续等待 2pass-offline 最终结果")
 				}
-				if a.AutoEnd {
-					a.AsrResult.WriteString(result.Text)
-					result.Text = a.AsrResult.String()
-					return result, true, nil
-				}
-			} else {
-				// 其他情况按原有逻辑执行
-				a.AsrResult.WriteString(result.Text)
-				if a.AutoEnd || result.IsFinal {
-					result.Text = a.AsrResult.String()
-					return result, true, nil
-				}
+				continue
 			}
 
-			if !ok {
-				log.Debugf("asr result channel closed")
-				return emptyResult, true, nil
+			if result.IsFinal {
+				return result, true, nil
 			}
 		}
 	}
@@ -224,6 +104,24 @@ func (a *Asr) ShouldRestartOnVoice() bool {
 	a.lock.RLock()
 	defer a.lock.RUnlock()
 	return a.PendingRestartOnVoice
+}
+
+func (a *Asr) MarkTextReceived() {
+	a.lock.Lock()
+	defer a.lock.Unlock()
+	a.ReceivedTextInTurn = true
+}
+
+func (a *Asr) HasReceivedText() bool {
+	a.lock.RLock()
+	defer a.lock.RUnlock()
+	return a.ReceivedTextInTurn
+}
+
+func (a *Asr) ResetReceivedText() {
+	a.lock.Lock()
+	defer a.lock.Unlock()
+	a.ReceivedTextInTurn = false
 }
 
 func (a *Asr) Stop() {
@@ -264,6 +162,13 @@ func (a *Asr) GetHistoryAudio() []float32 {
 	result := make([]float32, len(a.HistoryAudioBuffer))
 	copy(result, a.HistoryAudioBuffer)
 	return result
+}
+
+// GetHistoryAudioLen 获取历史音频缓存长度（采样点数）
+func (a *Asr) GetHistoryAudioLen() int {
+	a.lock.RLock()
+	defer a.lock.RUnlock()
+	return len(a.HistoryAudioBuffer)
 }
 
 // ClearHistoryAudio 清空历史音频缓存

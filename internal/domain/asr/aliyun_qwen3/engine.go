@@ -1,4 +1,4 @@
-﻿package aliyun_qwen3
+package aliyun_qwen3
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,24 @@ type AliyunQwen3ASR struct {
 	taskMu sync.Mutex
 	connMu sync.Mutex
 	conn   *websocket.Conn
+}
+
+func classifyAliyunQwen3RetryReason(err error) string {
+	if err == nil {
+		return types.RetryReasonNone
+	}
+
+	errText := strings.ToLower(err.Error())
+	if strings.Contains(errText, "read message failed") &&
+		(strings.Contains(errText, "forcibly closed by the remote host") ||
+			strings.Contains(errText, "websocket: close 1006") ||
+			strings.Contains(errText, "connection reset by peer") ||
+			strings.Contains(errText, "broken pipe") ||
+			strings.Contains(errText, "unexpected eof")) {
+		return types.RetryReasonAliyunQwen3ConnectionClosed
+	}
+
+	return types.RetryReasonNone
 }
 
 // NewAliyunQwen3ASR creates a new instance.
@@ -181,9 +200,10 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 						localErr = fmt.Errorf("read message failed: %w", err)
 					}
 					sendResult(types.StreamingResult{
-						Error:   localErr,
-						IsFinal: true,
-						AsrType: constants.AsrTypeAliyunQwen3,
+						Error:       localErr,
+						IsFinal:     true,
+						AsrType:     constants.AsrTypeAliyunQwen3,
+						RetryReason: classifyAliyunQwen3RetryReason(localErr),
 					})
 				}
 				return

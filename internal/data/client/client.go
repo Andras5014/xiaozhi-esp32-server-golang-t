@@ -295,6 +295,26 @@ func (c *ClientState) GetMaxIdleDuration() int64 {
 	return maxIdleDuration
 }
 
+func (c *ClientState) GetPreAsrTextSilenceDuration() int64 {
+	if viper.IsSet("chat.pre_asr_text_silence_duration") {
+		preTextSilenceDuration := viper.GetInt64("chat.pre_asr_text_silence_duration")
+		if preTextSilenceDuration <= 0 {
+			return math.MaxInt64
+		}
+		return preTextSilenceDuration
+	}
+
+	base := c.VoiceStatus.SilenceThresholdTime
+	if base <= 0 {
+		base = 400
+	}
+	preTextSilenceDuration := base * 4
+	if preTextSilenceDuration < 1000 {
+		preTextSilenceDuration = 1000
+	}
+	return preTextSilenceDuration
+}
+
 func (c *ClientState) UpdateLastActiveTs() {
 	c.MqttLastActiveTs = time.Now().Unix()
 }
@@ -435,6 +455,7 @@ func (state *ClientState) OnManualStop() {
 
 func (state *ClientState) OnVoiceSilence() {
 	log.Debugf("OnVoiceSilence, voiceDuration: %d, voiceDurationInSession: %d", state.Vad.GetVoiceDuration(), state.Vad.GetVoiceDurationInSession())
+	state.Asr.ResetReceivedText()
 	state.SetClientVoiceStop(true) //设置停止说话标志位, 此时收到的音频数据不会进vad
 	//客户端停止说话
 	state.Asr.Stop() //停止asr并获取结果，进行llm

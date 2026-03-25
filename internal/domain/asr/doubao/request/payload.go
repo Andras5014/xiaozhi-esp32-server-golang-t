@@ -18,11 +18,12 @@ type UserMeta struct {
 }
 
 type AudioMeta struct {
-	Format  string `json:"format,omitempty"`
-	Codec   string `json:"codec,omitempty"`
-	Rate    int    `json:"rate,omitempty"`
-	Bits    int    `json:"bits,omitempty"`
-	Channel int    `json:"channel,omitempty"`
+	Format   string `json:"format,omitempty"`
+	Codec    string `json:"codec,omitempty"`
+	Rate     int    `json:"rate,omitempty"`
+	Bits     int    `json:"bits,omitempty"`
+	Channel  int    `json:"channel,omitempty"`
+	Language string `json:"language,omitempty"`
 }
 
 type CorpusMeta struct {
@@ -32,13 +33,16 @@ type CorpusMeta struct {
 }
 
 type RequestMeta struct {
-	ModelName       string     `json:"model_name,omitempty"`
-	EnableITN       bool       `json:"enable_itn,omitempty"`
-	EnablePUNC      bool       `json:"enable_punc,omitempty"`
-	EnableDDC       bool       `json:"enable_ddc,omitempty"`
-	ShowUtterances  bool       `json:"show_utterances"`
-	EnableNonstream bool       `json:"enable_nonstream"`
-	Corpus          CorpusMeta `json:"corpus,omitempty"`
+	ModelName         string     `json:"model_name,omitempty"`
+	EnableITN         bool       `json:"enable_itn,omitempty"`
+	EnablePUNC        bool       `json:"enable_punc,omitempty"`
+	EnableDDC         bool       `json:"enable_ddc,omitempty"`
+	EndWindowSize     int        `json:"end_window_size,omitempty"`
+	ResultType        string     `json:"result_type,omitempty"`
+	ShowUtterances    bool       `json:"show_utterances"`
+	ForceToSpeechTime int        `json:"force_to_speech_time,omitempty"`
+	EnableNonstream   bool       `json:"enable_nonstream"`
+	Corpus            CorpusMeta `json:"corpus,omitempty"`
 }
 
 type AsrRequestPayload struct {
@@ -47,12 +51,45 @@ type AsrRequestPayload struct {
 	Request RequestMeta `json:"request"`
 }
 
-func NewFullClientRequest() []byte {
+type FullClientRequestOptions struct {
+	Uid               string
+	ModelName         string
+	EnableITN         bool
+	EnablePUNC        bool
+	EnableDDC         bool
+	EndWindowSize     int
+	ResultType        string
+	ShowUtterances    bool
+	ForceToSpeechTime int
+	EnableNonstream   bool
+}
+
+func (o FullClientRequestOptions) withDefaults() FullClientRequestOptions {
+	if o.Uid == "" {
+		o.Uid = "demo_uid"
+	}
+	if o.ModelName == "" {
+		o.ModelName = "bigmodel"
+	}
+	if o.EndWindowSize <= 0 {
+		o.EndWindowSize = 800
+	}
+	if o.ResultType == "" {
+		o.ResultType = "full"
+	}
+	if o.ForceToSpeechTime <= 0 {
+		o.ForceToSpeechTime = 1000
+	}
+	return o
+}
+
+func NewFullClientRequest(opts FullClientRequestOptions) []byte {
+	opts = opts.withDefaults()
 	var request bytes.Buffer
 	request.Write(DefaultHeader().WithMessageTypeSpecificFlags(common.POS_SEQUENCE).toBytes())
 	payload := AsrRequestPayload{
 		User: UserMeta{
-			Uid: "demo_uid",
+			Uid: opts.Uid,
 		},
 		Audio: AudioMeta{
 			Format:  "pcm",
@@ -62,12 +99,15 @@ func NewFullClientRequest() []byte {
 			Channel: 1,
 		},
 		Request: RequestMeta{
-			ModelName:       "bigmodel",
-			EnableITN:       true,
-			EnablePUNC:      true,
-			EnableDDC:       true,
-			ShowUtterances:  true,
-			EnableNonstream: false,
+			ModelName:         opts.ModelName,
+			EnableITN:         opts.EnableITN,
+			EnablePUNC:        opts.EnablePUNC,
+			EnableDDC:         opts.EnableDDC,
+			EndWindowSize:     opts.EndWindowSize,
+			ResultType:        opts.ResultType,
+			ShowUtterances:    opts.ShowUtterances,
+			ForceToSpeechTime: opts.ForceToSpeechTime,
+			EnableNonstream:   opts.EnableNonstream,
 		},
 	}
 	payloadArr, _ := sonic.Marshal(payload)
