@@ -18,46 +18,46 @@
 </template>
 
 <script setup>
-import { useRouter } from 'vue-router'
+import { useRouter } from "vue-router";
 
 const props = defineProps({
   title: {
     type: String,
-    default: '小智管理系统'
+    default: "布法罗智能体管理系统",
   },
   showBack: {
     type: Boolean,
-    default: true
+    default: true,
   },
   leftText: {
     type: String,
-    default: ''
+    default: "",
   },
   rightText: {
     type: String,
-    default: ''
-  }
-})
+    default: "",
+  },
+});
 
-const emit = defineEmits(['click-left', 'click-right'])
+const emit = defineEmits(["click-left", "click-right"]);
 
-const router = useRouter()
+const router = useRouter();
 
 const handleLeftClick = () => {
   if (props.showBack) {
-    router.back()
+    router.back();
   }
-  emit('click-left')
-}
+  emit("click-left");
+};
 
 const handleRightClick = () => {
-  emit('click-right')
-}
+  emit("click-right");
+};
 </script>
 
 <style scoped>
 .mobile-nav-bar {
-  background-color: #409EFF;
+  background-color: #409eff;
   color: white;
 }
 

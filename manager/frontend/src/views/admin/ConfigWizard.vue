@@ -1,8 +1,8 @@
 <template>
-  <div class="config-wizard">
-    <div class="wizard-header">
+  <div class="admin-config">
+    <div class="page-header">
       <h2>配置向导</h2>
-      <p class="wizard-desc">按步骤完成 OTA、VAD、ASR、LLM、TTS 基础配置，可随时跳过某步。</p>
+      <p class="header-desc">按步骤完成 OTA、VAD、ASR、LLM、TTS 基础配置，可随时跳过某步。</p>
     </div>
 
     <el-steps :active="currentStep" finish-status="success" align-center class="wizard-steps">
@@ -13,7 +13,7 @@
       <el-step title="TTS" description="语音合成" />
     </el-steps>
 
-    <el-card class="step-card" shadow="hover">
+    <el-card class="config-card step-card" shadow="never">
       <!-- Step 1: OTA -->
       <template v-if="currentStep === 0">
         <div class="step-title">OTA 配置</div>
@@ -82,7 +82,7 @@
         />
       </template>
 
-      <!-- 完成页：展示 OTA 地址与 WebSocket 地址 -->
+      <!-- 完成页 -->
       <template v-if="currentStep === 5">
         <div class="step-title">配置完成</div>
         <p class="step-hint">以下是根据您在 OTA 步骤填写的域名/IP 生成的地址，请下发至设备或固件使用。</p>
@@ -256,7 +256,7 @@ const asrForm = reactive({
   doubao: {
     appid: '',
     access_token: '',
-    ws_url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
+    ws_url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream',
     resource_id: 'volc.bigasr.sauc.duration',
     model_name: 'bigmodel',
     end_window_size: 800,
@@ -280,20 +280,6 @@ const asrForm = reactive({
   }
 })
 const asrFormRef = ref()
-const validateAliyunPcm = (rule, value, callback) => {
-  if (value !== 'pcm') {
-    callback(new Error('格式必须为pcm'))
-    return
-  }
-  callback()
-}
-const validateAliyun16000 = (rule, value, callback) => {
-  if (Number(value) !== 16000) {
-    callback(new Error('采样率必须为16000'))
-    return
-  }
-  callback()
-}
 const asrFormRules = {
   name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
   config_id: [{ required: true, message: '请输入配置ID', trigger: 'blur' }],
@@ -302,15 +288,8 @@ const asrFormRules = {
   'funasr.port': [{ required: true, message: '请输入端口', trigger: 'blur' }],
   'aliyun_funasr.ws_url': [{ required: true, message: '请输入WS URL', trigger: 'blur' }],
   'aliyun_funasr.model': [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
-  'aliyun_funasr.format': [
-    { required: true, message: '请选择音频格式', trigger: 'change' },
-    { validator: validateAliyunPcm, trigger: 'change' }
-  ],
-  'aliyun_funasr.sample_rate': [
-    { required: true, message: '请选择采样率', trigger: 'change' },
-    { validator: validateAliyun16000, trigger: 'change' }
-  ],
-  'aliyun_funasr.timeout': [{ required: true, message: '请输入超时时间', trigger: 'blur' }],
+  'aliyun_funasr.format': [{ required: true, message: '格式必须为pcm', trigger: 'change' }],
+  'aliyun_funasr.sample_rate': [{ required: true, message: '采样率必须为16000', trigger: 'change' }],
   'doubao.appid': [{ required: true, message: '请输入应用ID', trigger: 'blur' }],
   'doubao.access_token': [{ required: true, message: '请输入访问令牌', trigger: 'blur' }],
   'doubao.ws_url': [{ required: true, message: '请输入WebSocket URL', trigger: 'blur' }],
@@ -318,9 +297,7 @@ const asrFormRules = {
   'aliyun_qwen3.ws_url': [{ required: true, message: '请输入WS URL', trigger: 'blur' }],
   'aliyun_qwen3.model': [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
   'aliyun_qwen3.format': [{ required: true, message: '请选择音频格式', trigger: 'change' }],
-  'aliyun_qwen3.sample_rate': [{ required: true, message: '请选择采样率', trigger: 'change' }],
-  'aliyun_qwen3.language': [{ required: true, message: '请输入语言', trigger: 'blur' }],
-  'aliyun_qwen3.timeout': [{ required: true, message: '请输入超时时间', trigger: 'blur' }]
+  'aliyun_qwen3.sample_rate': [{ required: true, message: '请选择采样率', trigger: 'change' }]
 }
 
 const llmForm = reactive({
@@ -340,6 +317,7 @@ const llmForm = reactive({
   thinking_clear_thinking: 'default'
 })
 const llmFormRef = ref()
+
 function getResolvedLLMType(provider, type) {
   if (type) return type
   if (provider === 'dify' || provider === 'coze') return provider
@@ -357,52 +335,9 @@ const llmFormRules = {
   name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
   config_id: [{ required: true, message: '请输入配置ID', trigger: 'blur' }],
   provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
-  model_name: [{
-    required: true,
-    message: '请输入模型名称',
-    trigger: 'change'
-  }, {
-    validator: (_, value, callback) => {
-      const providerType = getResolvedLLMType(llmForm.provider, llmForm.type)
-      if ((providerType === 'openai' || providerType === 'ollama') && !value) {
-        callback(new Error('请输入模型名称'))
-        return
-      }
-      callback()
-    },
-    trigger: 'change'
-  }],
-  api_key: [{
-    validator: (_, value, callback) => {
-      if (getResolvedLLMType(llmForm.provider, llmForm.type) !== 'ollama' && !value) {
-        callback(new Error('请输入API密钥'))
-        return
-      }
-      callback()
-    },
-    trigger: 'blur'
-  }],
-  base_url: [{
-    validator: (_, value, callback) => {
-      if (getResolvedLLMType(llmForm.provider, llmForm.type) !== 'coze' && !value) {
-        callback(new Error('请输入基础URL'))
-        return
-      }
-      callback()
-    },
-    trigger: 'blur'
-  }],
-  max_tokens: [{
-    validator: (_, value, callback) => {
-      const providerType = getResolvedLLMType(llmForm.provider, llmForm.type)
-      if ((providerType === 'openai' || providerType === 'ollama') && (!value || Number(value) < 1 || Number(value) > 100000)) {
-        callback(new Error('max_tokens必须在1-100000之间'))
-        return
-      }
-      callback()
-    },
-    trigger: 'blur'
-  }]
+  model_name: [{ required: true, message: '请输入模型名称', trigger: 'change' }],
+  api_key: [{ required: true, message: '请输入API密钥', trigger: 'blur' }],
+  base_url: [{ required: true, message: '请输入基础URL', trigger: 'blur' }]
 }
 
 const ttsForm = reactive({
@@ -527,20 +462,7 @@ const ttsFormRules = {
   config_id: [{ required: true, message: '请输入配置ID', trigger: 'blur' }],
   provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
   'doubao_ws.appid': [{ required: true, message: '请输入应用ID', trigger: 'blur' }],
-  'doubao_ws.access_token': [{ required: true, message: '请输入访问令牌', trigger: 'blur' }],
-  'doubao_ws.ws_host': [{ required: true, message: '请输入WebSocket主机', trigger: 'blur' }],
-  'xunfei.app_id': [{ required: true, message: '请输入应用ID', trigger: 'blur' }],
-  'xunfei.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }],
-  'xunfei.api_secret': [{ required: true, message: '请输入API Secret', trigger: 'blur' }],
-  'xunfei.ws_url': [{ required: true, message: '请输入WebSocket URL', trigger: 'blur' }],
-  'xunfei.voice': [{ required: true, message: '请输入音色', trigger: 'blur' }],
-  'xunfei_super_tts.app_id': [{ required: true, message: '请输入应用ID', trigger: 'blur' }],
-  'xunfei_super_tts.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }],
-  'xunfei_super_tts.api_secret': [{ required: true, message: '请输入API Secret', trigger: 'blur' }],
-  'xunfei_super_tts.ws_url': [{ required: true, message: '请输入WebSocket URL', trigger: 'blur' }],
-  'xunfei_super_tts.voice': [{ required: true, message: '请输入音色', trigger: 'blur' }],
-  'minimax.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }],
-  'qwen_tts.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }]
+  'doubao_ws.access_token': [{ required: true, message: '请输入访问令牌', trigger: 'blur' }]
 }
 
 const finalOtaUrl = computed(() => {
@@ -1143,11 +1065,7 @@ async function runOtaTest() {
       const entry = Object.entries(ota).find(([k]) => !k.startsWith('_'))
       if (entry) {
         const [, v] = entry
-
-        // 格式化显示结果
         let displayText = ''
-
-        // WebSocket 结果
         if (v.websocket) {
           const ws = v.websocket
           displayText += `WebSocket: ${ws.ok ? '✓' : '✗'} ${ws.message}`
@@ -1157,8 +1075,6 @@ async function runOtaTest() {
             displayText += '\n'
           }
         }
-
-        // MQTT UDP 结果
         if (v.mqtt_udp) {
           const mqtt = v.mqtt_udp
           displayText += `MQTT UDP: ${mqtt.ok ? '✓' : '✗'} ${mqtt.message}`
@@ -1168,15 +1084,10 @@ async function runOtaTest() {
             displayText += '\n'
           }
         }
-
-        // OTA 响应内容（如果有）
         if (v.ota_response !== undefined && v.ota_response !== '') {
           displayText += `\n--- OTA 响应 ---\n${formatOtaResponseDisplay(v.ota_response)}`
         }
-
         otaTestResult.value = displayText.trim() || '未获取到详细信息'
-
-        // 根据整体结果显示消息
         const overallOk = v.ok
         if (overallOk) {
           ElMessage.success(v.message || 'OTA 测试通过')
@@ -1215,7 +1126,7 @@ async function loadOtaIfExists() {
       if (m) {
         otaForm.protocol = m[1] === 'wss' ? 'https' : 'http'
         otaForm.host = m[2]
-        otaForm.port = m[3] ? parseInt(m[3], 10) : 8989
+        if (m[3]) otaForm.port = parseInt(m[3], 10)
       }
     }
     const mqttEnabled = data.test?.mqtt?.enable || data.external?.mqtt?.enable
@@ -1228,7 +1139,6 @@ async function loadOtaIfExists() {
   } catch (_) {}
 }
 
-// 加载 TTS 音色列表（与 TTS 配置页一致）
 async function loadTtsVoiceOptions(provider) {
   if (!provider) {
     voiceOptions.value = []
@@ -1251,14 +1161,12 @@ async function loadTtsVoiceOptions(provider) {
   }
 }
 
-// 进入 TTS 步骤时加载当前 provider 的音色列表
 watch(currentStep, (step) => {
   if (step === 4 && ttsForm.provider) {
     nextTick(() => loadTtsVoiceOptions(ttsForm.provider))
   }
 }, { immediate: true })
 
-// TTS 步骤内切换 provider 时重新加载音色列表
 watch(() => ttsForm.provider, (provider) => {
   if (currentStep.value === 4 && provider) {
     loadTtsVoiceOptions(provider)
@@ -1280,92 +1188,125 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.config-wizard {
-  padding: 20px;
-  max-width: 820px;
+.admin-config {
+  padding: 24px;
+  max-width: 1200px;
   margin: 0 auto;
 }
-.wizard-header {
-  margin-bottom: 24px;
+
+.page-header {
+  margin-bottom: 32px;
+  text-align: center;
 }
-.wizard-header h2 {
-  margin: 0 0 8px 0;
-  font-size: 22px;
-  color: #303133;
-}
-.wizard-desc {
+
+.page-header h2 {
   margin: 0;
-  color: #909399;
-  font-size: 14px;
-}
-.wizard-steps {
-  margin-bottom: 24px;
-}
-.step-card {
-  padding: 24px;
-}
-.step-title {
-  font-size: 16px;
+  color: #1f2937;
+  font-size: 28px;
   font-weight: 600;
-  margin-bottom: 8px;
-  color: #303133;
+  letter-spacing: -0.025em;
 }
+
+.header-desc {
+  margin-top: 8px;
+  color: #6b7280;
+  font-size: 16px;
+}
+
+.wizard-steps {
+  margin-bottom: 40px;
+}
+
+.config-card {
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+}
+
+.step-card {
+  padding: 40px;
+  min-height: 400px;
+}
+
+.step-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 12px;
+}
+
 .step-hint {
-  color: #909399;
-  font-size: 13px;
-  margin-bottom: 20px;
+  font-size: 14px;
+  color: #6b7280;
+  margin-bottom: 24px;
+  line-height: 1.6;
 }
+
+.wizard-form {
+  max-width: 800px;
+  margin: 0 auto 32px;
+}
+
 .form-hint {
   display: block;
-  color: #909399;
-  font-size: 12px;
   margin-top: 4px;
+  font-size: 12px;
+  color: #9ca3af;
   line-height: 1.4;
 }
-.wizard-form {
-  margin-bottom: 24px;
-}
+
 .step-actions {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 1px solid #f1f5f9;
   display: flex;
+  justify-content: center;
   gap: 12px;
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid #ebeef5;
 }
+
 .result-box {
-  margin: 16px 0;
+  background: #f9fafb;
+  padding: 24px;
+  border-radius: 12px;
+  margin: 24px 0;
 }
+
 .result-item {
   margin-bottom: 16px;
 }
+
+.result-item:last-child {
+  margin-bottom: 0;
+}
+
 .result-label {
   display: block;
-  font-size: 13px;
-  color: #606266;
-  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 8px;
 }
+
 .ota-test-section {
   margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid #ebeef5;
 }
+
 .ota-test-result {
-  margin-top: 12px;
+  margin-top: 16px;
 }
-.ota-test-result .result-label {
-  margin-bottom: 6px;
-}
+
 .ota-test-json {
-  margin: 0;
-  padding: 12px;
-  background: #f5f7fa;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 280px;
-  overflow: auto;
+  background: #1f2937;
+  color: #f9fafb;
+  padding: 16px;
+  border-radius: 8px;
+  font-family: monospace;
+  font-size: 13px;
+  overflow-x: auto;
+}
+
+@media (max-width: 768px) {
+  .admin-config {
+    padding: 16px;
+  }
 }
 </style>

@@ -3,7 +3,7 @@
     <div class="setup-card">
       <div class="setup-header">
         <h1>系统初始化</h1>
-        <p>欢迎使用小智管理系统，请完成初始设置</p>
+        <p>欢迎使用布法罗智能体管理系统，请完成初始设置</p>
       </div>
 
       <!-- 检查状态 -->
@@ -12,11 +12,11 @@
           <div class="spinner"></div>
           <p>正在检查系统状态...</p>
         </div>
-        
+
         <div v-else-if="needsSetup" class="setup-form">
           <h2>创建管理员账户</h2>
           <p>请设置管理员账户信息，用于系统管理</p>
-          
+
           <form @submit.prevent="initializeSystem">
             <div class="form-group">
               <label for="username">管理员用户名</label>
@@ -30,7 +30,7 @@
                 placeholder="请输入管理员用户名"
               />
             </div>
-            
+
             <div class="form-group">
               <label for="email">管理员邮箱</label>
               <input
@@ -41,7 +41,7 @@
                 placeholder="请输入管理员邮箱"
               />
             </div>
-            
+
             <div class="form-group">
               <label for="password">管理员密码</label>
               <input
@@ -54,7 +54,7 @@
                 placeholder="请输入管理员密码（至少6位）"
               />
             </div>
-            
+
             <div class="form-group">
               <label for="confirmPassword">确认密码</label>
               <input
@@ -65,18 +65,18 @@
                 placeholder="请再次输入密码"
               />
             </div>
-            
+
             <div class="error-message" v-if="errorMessage">
               {{ errorMessage }}
             </div>
-            
+
             <button type="submit" :disabled="initializing" class="setup-btn">
               <span v-if="initializing">正在初始化...</span>
               <span v-else>开始初始化</span>
             </button>
           </form>
         </div>
-        
+
         <div v-else class="setup-complete">
           <div class="success-icon">✅</div>
           <h2>系统已初始化</h2>
@@ -84,7 +84,7 @@
           <router-link to="/login" class="login-btn">前往登录</router-link>
         </div>
       </div>
-      
+
       <!-- 初始化成功 -->
       <div v-else class="setup-success">
         <div class="success-icon">🎉</div>
@@ -101,78 +101,78 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import api from '@/utils/api'
+import { ref, onMounted } from "vue";
+import { useRouter } from "vue-router";
+import api from "@/utils/api";
 
 export default {
-  name: 'Setup',
+  name: "Setup",
   setup() {
-    const router = useRouter()
-    const checking = ref(true)
-    const needsSetup = ref(false)
-    const initialized = ref(false)
-    const initializing = ref(false)
-    const errorMessage = ref('')
-    
+    const router = useRouter();
+    const checking = ref(true);
+    const needsSetup = ref(false);
+    const initialized = ref(false);
+    const initializing = ref(false);
+    const errorMessage = ref("");
+
     const form = ref({
-      admin_username: '',
-      admin_email: '',
-      admin_password: ''
-    })
-    
-    const confirmPassword = ref('')
-    const adminInfo = ref({})
+      admin_username: "",
+      admin_email: "",
+      admin_password: "",
+    });
+
+    const confirmPassword = ref("");
+    const adminInfo = ref({});
 
     const checkSetupStatus = async () => {
       try {
-        checking.value = true
-        const response = await api.get('/setup/status')
-        
+        checking.value = true;
+        const response = await api.get("/setup/status");
+
         if (response.data.needs_setup) {
-          needsSetup.value = true
+          needsSetup.value = true;
         } else {
           // 系统已初始化，跳转到登录页
-          router.push('/login')
+          router.push("/login");
         }
       } catch (error) {
-        console.error('检查系统状态失败:', error)
-        errorMessage.value = '检查系统状态失败，请刷新页面重试'
+        console.error("检查系统状态失败:", error);
+        errorMessage.value = "检查系统状态失败，请刷新页面重试";
       } finally {
-        checking.value = false
+        checking.value = false;
       }
-    }
+    };
 
     const initializeSystem = async () => {
       // 验证密码确认
       if (form.value.admin_password !== confirmPassword.value) {
-        errorMessage.value = '两次输入的密码不一致'
-        return
+        errorMessage.value = "两次输入的密码不一致";
+        return;
       }
 
       try {
-        initializing.value = true
-        errorMessage.value = ''
-        
-        const response = await api.post('/setup/initialize', form.value)
-        
-        adminInfo.value = response.data.admin
-        initialized.value = true
+        initializing.value = true;
+        errorMessage.value = "";
+
+        const response = await api.post("/setup/initialize", form.value);
+
+        adminInfo.value = response.data.admin;
+        initialized.value = true;
       } catch (error) {
-        console.error('系统初始化失败:', error)
+        console.error("系统初始化失败:", error);
         if (error.response?.data?.error) {
-          errorMessage.value = error.response.data.error
+          errorMessage.value = error.response.data.error;
         } else {
-          errorMessage.value = '系统初始化失败，请重试'
+          errorMessage.value = "系统初始化失败，请重试";
         }
       } finally {
-        initializing.value = false
+        initializing.value = false;
       }
-    }
+    };
 
     onMounted(() => {
-      checkSetupStatus()
-    })
+      checkSetupStatus();
+    });
 
     return {
       checking,
@@ -183,10 +183,10 @@ export default {
       form,
       confirmPassword,
       adminInfo,
-      initializeSystem
-    }
-  }
-}
+      initializeSystem,
+    };
+  },
+};
 </script>
 
 <style scoped>
@@ -240,8 +240,12 @@ export default {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .setup-form h2 {

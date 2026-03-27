@@ -1,0 +1,209 @@
+/* Global Element Plus Overrides */
+
+.el-menu-item {
+  --el-menu-item-height: 50px;
+}
+
+.el-card {
+  border-radius: 16px !important;
+  border: none !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05) !important;
+}
+
+.el-card:hover {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Ensure card header doesn't have a border if card has no border */
+.el-card__header {
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+
+/* Tabs optimization */
+.el-tabs--border-card {
+  border-radius: 12px !important;
+  border: none !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05) !important;
+  overflow: hidden;
+}
+
+.el-tabs__nav-wrap::after {
+  height: 1px !important;
+  background-color: #f1f5f9 !important;
+}
+
+.el-tabs__item {
+  font-weight: 500 !important;
+  transition: all 0.3s ease !important;
+}
+
+.el-tabs__item.is-active {
+  font-weight: 700 !important;
+}
+
+/* Common Header Styles */
+.page-header h2 {
+  font-weight: 700;
+  color: #1f2937;
+}
+
+/* Button transitions */
+.el-button {
+  border-radius: 8px !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+
+  .el-icon {
+    margin-right: 4px;
+  }
+}
+
+.el-button:active {
+  transform: scale(0.95);
+}
+/* Alert Styles */
+.el-alert {
+  border-radius: 12px !important;
+  padding: 16px 20px !important;
+  border: 1px solid rgba(0, 0, 0, 0.04) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03) !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+.el-alert:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.06) !important;
+}
+
+.el-alert--info {
+  background-color: #fafcfe !important;
+  color: #3b82f6 !important;
+}
+
+.el-alert--success {
+  background-color: #f6fffa !important;
+  color: #10b981 !important;
+}
+
+.el-alert--warning {
+  background-color: #fffdf5 !important;
+  color: #f59e0b !important;
+}
+
+.el-alert--error {
+  background-color: #fffafb !important;
+  color: #ef4444 !important;
+}
+
+.el-alert .el-alert__icon {
+  width: 18px !important;
+  height: 18px !important;
+  font-size: 18px !important;
+  margin-right: 12px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 50% !important;
+  background-color: currentColor !important;
+  color: white !important;
+  flex-shrink: 0 !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Info specific icon color for contrast if needed */
+.el-alert--info .el-alert__icon {
+  background-color: #3b82f6 !important;
+}
+.el-alert--success .el-alert__icon {
+  background-color: #10b981 !important;
+}
+.el-alert--warning .el-alert__icon {
+  background-color: #f59e0b !important;
+}
+.el-alert--error .el-alert__icon {
+  background-color: #ef4444 !important;
+}
+
+.el-alert .el-alert__content {
+  padding: 0 !important;
+  color: #374151 !important;
+}
+
+.el-alert .el-alert__title {
+  font-weight: 700 !important;
+  font-size: 15px !important;
+  line-height: 1.4 !important;
+  margin-bottom: 2px !important;
+}
+
+.el-alert .el-alert__description {
+  font-size: 14px !important;
+  margin: 4px 0 0 !important;
+  line-height: 1.6 !important;
+  opacity: 0.85 !important;
+  color: #4b5563 !important;
+}
+
+.el-alert .el-alert__close-btn {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  right: 15px !important;
+  font-size: 16px !important;
+  color: #9ca3af !important;
+  opacity: 0.6 !important;
+}
+
+.el-alert .el-alert__close-btn:hover {
+  opacity: 1 !important;
+  color: #6b7280 !important;
+}
+
+/* Dialog Styles */
+.el-dialog {
+  border-radius: 16px !important;
+  overflow: hidden !important;
+  box-shadow:
+    0 20px 25px -5px rgba(0, 0, 0, 0.1),
+    0 10px 10px -5px rgba(0, 0, 0, 0.04) !important;
+}
+
+.el-dialog__header {
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+
+.el-dialog__title {
+  font-weight: 700 !important;
+  font-size: 1.15rem !important;
+  color: #1f2937 !important;
+}
+
+.el-dialog__body {
+  padding: 24px !important;
+}
+
+.el-dialog__footer {
+  border-top: 1px solid #f1f5f9 !important;
+}
+
+.el-dialog__headerbtn {
+  top: 15px !important;
+  right: 15px !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 8px !important;
+  transition: all 0.2s ease !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.el-dialog__headerbtn:hover {
+  background-color: #f1f5f9 !important;
+}
+
+.el-dialog__headerbtn .el-dialog__close {
+  color: #6b7280 !important;
+}

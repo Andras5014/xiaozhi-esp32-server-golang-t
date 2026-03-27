@@ -1,42 +1,43 @@
 <template>
-  <div class="config-page">
+  <div class="admin-config">
     <div class="page-header">
-      <div class="header-left">
-        <h2>Vision配置管理</h2>
-      </div>
+      <h2>Vision配置管理</h2>
     </div>
 
     <!-- 基础配置部分 -->
-    <el-card class="base-config-card" style="margin-bottom: 20px;">
+    <el-card class="main-card info-card" shadow="hover">
       <template #header>
         <div class="card-header">
           <span>基础配置</span>
         </div>
       </template>
-      
+
       <el-form
         ref="baseFormRef"
         :model="baseForm"
         :rules="baseRules"
         label-width="120px"
-        style="max-width: 600px;"
+        class="base-form"
       >
         <el-form-item label="启用认证" prop="enable_auth">
           <el-switch v-model="baseForm.enable_auth" />
           <div class="form-tip">是否启用视觉识别接口的鉴权</div>
         </el-form-item>
-        
+
         <el-form-item label="Vision URL" prop="vision_url">
-          <el-input 
-            v-model="baseForm.vision_url" 
+          <el-input
+            v-model="baseForm.vision_url"
             placeholder="请输入Vision API地址"
-            style="width: 100%;"
           />
           <div class="form-tip">返回给客户端用于图片识别的HTTP请求地址</div>
         </el-form-item>
-        
+
         <el-form-item>
-          <el-button type="primary" @click="saveBaseConfig" :loading="baseSaving">
+          <el-button
+            type="primary"
+            @click="saveBaseConfig"
+            :loading="baseSaving"
+          >
             保存基础配置
           </el-button>
         </el-form-item>
@@ -44,7 +45,7 @@
     </el-card>
 
     <!-- 配置列表部分 -->
-    <el-card>
+    <el-card class="main-card" shadow="hover">
       <template #header>
         <div class="card-header">
           <span>模型配置列表</span>
@@ -55,35 +56,47 @@
         </div>
       </template>
 
-      <el-table :data="configs" style="width: 100%" v-loading="loading">
-        <el-table-column prop="id" label="ID" width="80" />
+      <el-table
+        :data="configs"
+        v-loading="loading"
+        stripe
+        border
+        class="config-table"
+      >
+        <el-table-column prop="id" label="ID" width="80" align="center" />
         <el-table-column prop="name" label="配置名称" />
         <el-table-column prop="provider" label="提供商" />
-        <el-table-column prop="enabled" label="启用状态" width="80" align="center">
+        <el-table-column prop="enabled" label="启用状态" align="center">
           <template #default="scope">
-            <el-switch 
-              v-model="scope.row.enabled" 
+            <el-switch
+              v-model="scope.row.enabled"
               @change="toggleEnable(scope.row)"
             />
           </template>
         </el-table-column>
-        <el-table-column prop="is_default" label="默认配置" width="80" align="center">
+        <el-table-column prop="is_default" label="默认配置" align="center">
           <template #default="scope">
-            <el-switch 
-              v-model="scope.row.is_default" 
+            <el-switch
+              v-model="scope.row.is_default"
               @change="toggleDefault(scope.row)"
-              :disabled="scope.row.is_default && getEnabledConfigs().length === 1"
+              :disabled="
+                scope.row.is_default && getEnabledConfigs().length === 1
+              "
             />
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
+        <el-table-column prop="created_at" label="创建时间" align="center">
           <template #default="scope">
-            {{ formatDate(scope.row.created_at) }}
+            <span class="time-text">{{
+              formatDate(scope.row.created_at)
+            }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180">
+        <el-table-column label="操作" width="200" fixed="right" align="center">
           <template #default="scope">
-            <el-button size="small" @click="editConfig(scope.row)">编辑</el-button>
+            <el-button size="small" @click="editConfig(scope.row)">
+              编辑
+            </el-button>
             <el-button
               size="small"
               type="danger"
@@ -103,56 +116,86 @@
       width="700px"
       @close="handleDialogClose"
     >
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        label-width="120px"
-      >
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
         <el-form-item label="提供商" prop="provider">
-          <el-select v-model="form.provider" placeholder="请选择提供商" style="width: 100%">
+          <el-select
+            v-model="form.provider"
+            placeholder="请选择提供商"
+            style="width: 100%"
+          >
             <el-option label="阿里云视觉" value="aliyun_vision" />
             <el-option label="豆包视觉" value="doubao_vision" />
           </el-select>
         </el-form-item>
-        
+
         <el-form-item label="配置名称" prop="name">
           <el-input v-model="form.name" placeholder="请输入配置名称" />
         </el-form-item>
-        
+
         <el-form-item label="类型" prop="type">
           <el-input v-model="form.type" placeholder="请输入类型" />
         </el-form-item>
-        
+
         <el-form-item label="模型名称" prop="model_name">
           <el-input v-model="form.model_name" placeholder="请输入模型名称" />
         </el-form-item>
-        
+
         <el-form-item label="API密钥" prop="api_key">
-          <el-input v-model="form.api_key" type="password" placeholder="请输入API密钥" show-password />
+          <el-input
+            v-model="form.api_key"
+            type="password"
+            placeholder="请输入API密钥"
+            show-password
+          />
         </el-form-item>
-        
+
         <el-form-item label="基础URL" prop="base_url">
           <el-input v-model="form.base_url" placeholder="请输入基础URL" />
         </el-form-item>
-        
+
         <el-form-item label="最大令牌数" prop="max_tokens">
-          <el-input-number v-model="form.max_tokens" :min="1" :max="100000" placeholder="请输入最大令牌数" style="width: 100%" />
+          <el-input-number
+            v-model="form.max_tokens"
+            :min="1"
+            :max="100000"
+            placeholder="请输入最大令牌数"
+            style="width: 100%"
+          />
         </el-form-item>
-        
+
         <el-form-item label="温度" prop="temperature">
-          <el-input-number v-model="form.temperature" :min="0" :max="2" :step="0.1" placeholder="请输入温度" style="width: 100%" />
+          <el-input-number
+            v-model="form.temperature"
+            :min="0"
+            :max="2"
+            :step="0.1"
+            placeholder="请输入温度"
+            style="width: 100%"
+          />
         </el-form-item>
-        
+
         <el-form-item label="Top P" prop="top_p">
-          <el-input-number v-model="form.top_p" :min="0" :max="1" :step="0.1" placeholder="请输入Top P" style="width: 100%" />
+          <el-input-number
+            v-model="form.top_p"
+            :min="0"
+            :max="1"
+            :step="0.1"
+            placeholder="请输入Top P"
+            style="width: 100%"
+          />
         </el-form-item>
-        
+
         <el-form-item label="超时时间(秒)" prop="timeout">
-          <el-input-number v-model="form.timeout" :min="1" :max="300" placeholder="请输入超时时间" style="width: 100%" />
+          <el-input-number
+            v-model="form.timeout"
+            :min="1"
+            :max="300"
+            placeholder="请输入超时时间"
+            style="width: 100%"
+          />
         </el-form-item>
       </el-form>
-      
+
       <template #footer>
         <el-button @click="handleDialogClose">取消</el-button>
         <el-button type="primary" @click="handleSave" :loading="saving">
@@ -164,48 +207,48 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
-import api from '../../utils/api'
+import { ref, reactive, onMounted } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { Plus, Edit, Delete } from "@element-plus/icons-vue";
+import api from "../../utils/api";
 
-const configs = ref([])
-const loading = ref(false)
-const saving = ref(false)
-const baseSaving = ref(false)
-const showDialog = ref(false)
-const editingConfig = ref(null)
-const formRef = ref()
-const baseFormRef = ref()
+const configs = ref([]);
+const loading = ref(false);
+const saving = ref(false);
+const baseSaving = ref(false);
+const showDialog = ref(false);
+const editingConfig = ref(null);
+const formRef = ref();
+const baseFormRef = ref();
 
 // 基础配置表单
 const baseForm = reactive({
   enable_auth: false,
-  vision_url: ''
-})
+  vision_url: "",
+});
 
 // 基础配置验证规则
 const baseRules = {
   vision_url: [
-    { required: true, message: '请输入Vision URL', trigger: 'blur' },
-    { type: 'url', message: '请输入有效的URL', trigger: 'blur' }
-  ]
-}
+    { required: true, message: "请输入Vision URL", trigger: "blur" },
+    { type: "url", message: "请输入有效的URL", trigger: "blur" },
+  ],
+};
 
 const form = reactive({
-  name: '',
-  provider: 'aliyun_vision',
+  name: "",
+  provider: "aliyun_vision",
   is_default: false,
   enabled: true,
-  type: 'openai',
-  model_name: 'qwen-vl-max',
-  api_key: '',
-  base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  type: "openai",
+  model_name: "qwen-vl-max",
+  api_key: "",
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
   max_tokens: 1000,
   temperature: 0.1,
   top_p: 0.1,
-  timeout: 30
-})
+  timeout: 30,
+});
 
 const generateConfig = () => {
   return JSON.stringify({
@@ -216,249 +259,260 @@ const generateConfig = () => {
     max_tokens: form.max_tokens,
     temperature: form.temperature,
     top_p: form.top_p,
-    timeout: form.timeout
-  })
-}
+    timeout: form.timeout,
+  });
+};
 
 const rules = {
-  name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
-  provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
-  type: [{ required: true, message: '请输入类型', trigger: 'blur' }],
-  model_name: [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
-  api_key: [{ required: true, message: '请输入API密钥', trigger: 'blur' }],
+  name: [{ required: true, message: "请输入配置名称", trigger: "blur" }],
+  provider: [{ required: true, message: "请选择提供商", trigger: "change" }],
+  type: [{ required: true, message: "请输入类型", trigger: "blur" }],
+  model_name: [{ required: true, message: "请输入模型名称", trigger: "blur" }],
+  api_key: [{ required: true, message: "请输入API密钥", trigger: "blur" }],
   base_url: [
-    { required: true, message: '请输入基础URL', trigger: 'blur' },
-    { type: 'url', message: '请输入有效的URL', trigger: 'blur' }
+    { required: true, message: "请输入基础URL", trigger: "blur" },
+    { type: "url", message: "请输入有效的URL", trigger: "blur" },
   ],
-  max_tokens: [{ required: true, message: '请输入最大令牌数', trigger: 'blur' }],
-  timeout: [{ required: true, message: '请输入超时时间', trigger: 'blur' }]
-}
+  max_tokens: [
+    { required: true, message: "请输入最大令牌数", trigger: "blur" },
+  ],
+  timeout: [{ required: true, message: "请输入超时时间", trigger: "blur" }],
+};
 
 // 加载基础配置
 const loadBaseConfig = async () => {
   try {
-    const response = await api.get('/admin/vision-base-config')
-    const data = response.data.data || {}
-    baseForm.enable_auth = data.enable_auth || false
-    baseForm.vision_url = data.vision_url || ''
+    const response = await api.get("/admin/vision-base-config");
+    const data = response.data.data || {};
+    baseForm.enable_auth = data.enable_auth || false;
+    baseForm.vision_url = data.vision_url || "";
   } catch (error) {
-    console.error('加载基础配置失败:', error)
+    console.error("加载基础配置失败:", error);
   }
-}
+};
 
 // 保存基础配置
 const saveBaseConfig = async () => {
-  if (!baseFormRef.value) return
-  
+  if (!baseFormRef.value) return;
+
   await baseFormRef.value.validate(async (valid) => {
     if (valid) {
-      baseSaving.value = true
+      baseSaving.value = true;
       try {
-        await api.put('/admin/vision-base-config', {
+        await api.put("/admin/vision-base-config", {
           enable_auth: baseForm.enable_auth,
-          vision_url: baseForm.vision_url
-        })
-        ElMessage.success('基础配置保存成功')
+          vision_url: baseForm.vision_url,
+        });
+        ElMessage.success("基础配置保存成功");
       } catch (error) {
-        ElMessage.error('保存失败，请检查网络连接和输入内容')
+        ElMessage.error("保存失败，请检查网络连接和输入内容");
       } finally {
-        baseSaving.value = false
+        baseSaving.value = false;
       }
     }
-  })
-}
+  });
+};
 
 const loadConfigs = async () => {
-  loading.value = true
+  loading.value = true;
   try {
-    const response = await api.get('/admin/vision-configs')
+    const response = await api.get("/admin/vision-configs");
     // 过滤掉vision_base配置，确保不在列表中显示
-    const allConfigs = response.data.data || []
-    configs.value = allConfigs.filter(config => config.config_id !== 'vision_base')
+    const allConfigs = response.data.data || [];
+    configs.value = allConfigs.filter(
+      (config) => config.config_id !== "vision_base",
+    );
   } catch (error) {
-    ElMessage.error('加载配置失败')
+    ElMessage.error("加载配置失败");
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 
 const editConfig = (config) => {
-  editingConfig.value = config
-  form.name = config.name
-  form.provider = config.provider
-  form.is_default = config.is_default
-  form.enabled = config.enabled
-  
+  editingConfig.value = config;
+  form.name = config.name;
+  form.provider = config.provider;
+  form.is_default = config.is_default;
+  form.enabled = config.enabled;
+
   try {
-    const configData = JSON.parse(config.json_data || '{}')
-    form.type = configData.type || ''
-    form.model_name = configData.model_name || ''
-    form.api_key = configData.api_key || ''
-    form.base_url = configData.base_url || ''
-    form.max_tokens = configData.max_tokens || 4096
-    form.temperature = configData.temperature !== undefined ? configData.temperature : 0.7
-    form.top_p = configData.top_p !== undefined ? configData.top_p : 0.9
-    form.timeout = configData.timeout || 30
+    const configData = JSON.parse(config.json_data || "{}");
+    form.type = configData.type || "";
+    form.model_name = configData.model_name || "";
+    form.api_key = configData.api_key || "";
+    form.base_url = configData.base_url || "";
+    form.max_tokens = configData.max_tokens || 4096;
+    form.temperature =
+      configData.temperature !== undefined ? configData.temperature : 0.7;
+    form.top_p = configData.top_p !== undefined ? configData.top_p : 0.9;
+    form.timeout = configData.timeout || 30;
   } catch (error) {
-    console.error('解析配置失败:', error)
-    ElMessage.warning('配置格式错误，已重置为默认值')
+    console.error("解析配置失败:", error);
+    ElMessage.warning("配置格式错误，已重置为默认值");
   }
-  
-  showDialog.value = true
-}
+
+  showDialog.value = true;
+};
 
 const handleSave = async () => {
-  if (!formRef.value) return
-  
+  if (!formRef.value) return;
+
   await formRef.value.validate(async (valid) => {
     if (valid) {
-      saving.value = true
+      saving.value = true;
       try {
-        const isFirstConfig = !editingConfig.value && configs.value.length === 0
-        
+        const isFirstConfig =
+          !editingConfig.value && configs.value.length === 0;
+
         const configData = {
           name: form.name,
           provider: form.provider,
           is_default: isFirstConfig || form.is_default,
           enabled: form.enabled !== undefined ? form.enabled : true,
-          json_data: generateConfig()
-        }
-        
+          json_data: generateConfig(),
+        };
+
         if (editingConfig.value) {
-          await api.put(`/admin/vision-configs/${editingConfig.value.id}`, configData)
-          ElMessage.success('更新成功')
+          await api.put(
+            `/admin/vision-configs/${editingConfig.value.id}`,
+            configData,
+          );
+          ElMessage.success("更新成功");
         } else {
-          await api.post('/admin/vision-configs', configData)
-          ElMessage.success('添加成功')
+          await api.post("/admin/vision-configs", configData);
+          ElMessage.success("添加成功");
         }
-        
-        showDialog.value = false
-        loadConfigs()
+
+        showDialog.value = false;
+        loadConfigs();
       } catch (error) {
-        ElMessage.error('保存失败，请检查网络连接和输入内容')
+        ElMessage.error("保存失败，请检查网络连接和输入内容");
       } finally {
-        saving.value = false
+        saving.value = false;
       }
     }
-  })
-}
+  });
+};
 
 const toggleEnable = async (config) => {
   try {
-    await api.post(`/admin/configs/${config.id}/toggle`)
-    ElMessage.success(`${config.enabled ? '启用' : '禁用'}成功`)
+    await api.post(`/admin/configs/${config.id}/toggle`);
+    ElMessage.success(`${config.enabled ? "启用" : "禁用"}成功`);
   } catch (error) {
-    config.enabled = !config.enabled
-    ElMessage.error('操作失败')
+    config.enabled = !config.enabled;
+    ElMessage.error("操作失败");
   }
-}
+};
 
 const toggleDefault = async (config) => {
   try {
     if (!config.enabled) {
-      ElMessage.warning('请先启用该配置才能设为默认')
-      config.is_default = false
-      return
+      ElMessage.warning("请先启用该配置才能设为默认");
+      config.is_default = false;
+      return;
     }
-    
+
     const configData = {
       name: config.name,
       provider: config.provider,
       is_default: config.is_default,
       enabled: config.enabled,
-      json_data: config.json_data
-    }
-    
-    await api.put(`/admin/vision-configs/${config.id}`, configData)
-    ElMessage.success(config.is_default ? '设为默认成功' : '取消默认成功')
-    loadConfigs()
+      json_data: config.json_data,
+    };
+
+    await api.put(`/admin/vision-configs/${config.id}`, configData);
+    ElMessage.success(config.is_default ? "设为默认成功" : "取消默认成功");
+    loadConfigs();
   } catch (error) {
-    config.is_default = !config.is_default
-    ElMessage.error('操作失败')
+    config.is_default = !config.is_default;
+    ElMessage.error("操作失败");
   }
-}
+};
 
 const getEnabledConfigs = () => {
-  return configs.value.filter(config => config.enabled)
-}
+  return configs.value.filter((config) => config.enabled);
+};
 
 const deleteConfig = async (id) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个配置吗？', '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-    
-    await api.delete(`/admin/vision-configs/${id}`)
-    ElMessage.success('删除成功')
-    loadConfigs()
+    await ElMessageBox.confirm("确定要删除这个配置吗？", "提示", {
+      confirmButtonText: "确定",
+      cancelButtonText: "取消",
+      type: "warning",
+    });
+
+    await api.delete(`/admin/vision-configs/${id}`);
+    ElMessage.success("删除成功");
+    loadConfigs();
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error('删除失败')
+    if (error !== "cancel") {
+      ElMessage.error("删除失败");
     }
   }
-}
+};
 
 const resetForm = () => {
-  editingConfig.value = null
+  editingConfig.value = null;
   Object.assign(form, {
-    name: '',
-    provider: 'aliyun_vision',
+    name: "",
+    provider: "aliyun_vision",
     is_default: false,
     enabled: true,
-    type: 'openai',
-    model_name: 'qwen-vl-max',
-    api_key: '',
-    base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    type: "openai",
+    model_name: "qwen-vl-max",
+    api_key: "",
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     max_tokens: 1000,
     temperature: 0.1,
     top_p: 0.1,
-    timeout: 30
-  })
-  formRef.value?.clearValidate()
-}
+    timeout: 30,
+  });
+  formRef.value?.clearValidate();
+};
 
 const handleDialogClose = () => {
-  showDialog.value = false
-  resetForm()
+  showDialog.value = false;
+  resetForm();
   if (formRef.value) {
-    formRef.value.resetFields()
+    formRef.value.resetFields();
   }
-}
+};
 
 const formatDate = (dateString) => {
-  return new Date(dateString).toLocaleString('zh-CN')
-}
+  return new Date(dateString).toLocaleString("zh-CN");
+};
 
 onMounted(() => {
-  loadBaseConfig()
-  loadConfigs()
-})
+  loadBaseConfig();
+  loadConfigs();
+});
 </script>
 
 <style scoped>
-.config-page {
-  padding: 20px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+.admin-config {
+  padding: 24px;
 }
 
 .page-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
-.header-left h2 {
+.page-header h2 {
   margin: 0;
-  color: #333;
+  color: #1f2937;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
-.base-config-card {
-  background: #f8f9fa;
+.main-card {
+  border-radius: 16px;
+  margin-bottom: 24px;
+  border: 1px solid #e5e7eb;
 }
 
 .card-header {
@@ -466,13 +520,54 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   font-weight: 600;
-  color: #333;
+  color: #374151;
+}
+
+.info-card {
+  background: #ffffff;
+}
+
+.base-form {
+  max-width: 600px;
+  padding: 8px 0;
 }
 
 .form-tip {
-  font-size: 12px;
-  color: #666;
-  margin-top: 4px;
-  line-height: 1.4;
+  font-size: 13px;
+  color: #6b7280;
+  margin-top: 6px;
+  line-height: 1.5;
+  padding-left: 10px;
+}
+
+.config-table {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.time-text {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+:deep(.el-table) {
+  --el-table-border-color: #f1f5f9;
+  --el-table-header-bg-color: #f9fafb;
+}
+
+:deep(.el-table th.el-table__cell) {
+  font-weight: 600;
+  color: #4b5563;
+  padding: 12px 0;
+}
+
+:deep(.el-table td.el-table__cell) {
+  padding: 12px 0;
+}
+
+@media (max-width: 768px) {
+  .admin-config {
+    padding: 16px;
+  }
 }
 </style>

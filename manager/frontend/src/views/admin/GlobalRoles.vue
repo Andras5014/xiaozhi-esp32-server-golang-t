@@ -1,73 +1,103 @@
 <template>
-  <div class="roles-page">
+  <div class="admin-config">
     <div class="page-header">
       <h2>全局角色管理</h2>
-      <el-button type="primary" @click="showCreateDialog = true">
-        <el-icon><Plus /></el-icon>
-        创建全局角色
-      </el-button>
+      <div class="header-actions">
+        <el-button type="primary" @click="showCreateDialog = true">
+          <el-icon><Plus /></el-icon>
+          创建全局角色
+        </el-button>
+      </div>
     </div>
 
-    <el-row :gutter="12" class="roles-grid" v-loading="loading">
-      <el-col :xs="24" :sm="12" :lg="8" v-for="role in roles" :key="role.id" class="role-col">
-        <el-card class="role-card" shadow="hover">
-          <template #header>
-            <div class="card-header">
-              <span class="role-name">{{ role.name }}</span>
-              <el-dropdown @command="(cmd) => handleCardAction(cmd, role)">
-                <el-icon class="more-icon"><MoreFilled /></el-icon>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="edit">
-                      <el-icon><Edit /></el-icon>
-                      编辑
-                    </el-dropdown-item>
-                    <el-dropdown-item command="duplicate">
-                      <el-icon><CopyDocument /></el-icon>
-                      复制
-                    </el-dropdown-item>
-                    <el-dropdown-item command="toggle-status">
-                      <el-icon><SwitchButton /></el-icon>
-                      {{ isRoleActive(role) ? '关闭' : '开启' }}
-                    </el-dropdown-item>
-                    <el-dropdown-item command="set-default" :disabled="role.is_default">
-                      <el-icon><Star /></el-icon>
-                      {{ role.is_default ? '已默认' : '设为默认' }}
-                    </el-dropdown-item>
-                    <el-dropdown-item command="delete" divided>
-                      <el-icon><Delete /></el-icon>
-                      删除
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+    <div class="roles-grid-container" v-loading="loading">
+      <el-row :gutter="24">
+        <el-col
+          :xs="24"
+          :sm="12"
+          :lg="8"
+          v-for="role in roles"
+          :key="role.id"
+          class="role-col"
+        >
+          <el-card class="role-card" shadow="never">
+            <template #header>
+              <div class="card-header">
+                <span class="role-name">{{ role.name }}</span>
+                <el-dropdown @command="(cmd) => handleCardAction(cmd, role)">
+                  <el-icon class="more-icon"><MoreFilled /></el-icon>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="edit">
+                        <el-icon><Edit /></el-icon>
+                        编辑
+                      </el-dropdown-item>
+                      <el-dropdown-item command="duplicate">
+                        <el-icon><CopyDocument /></el-icon>
+                        复制
+                      </el-dropdown-item>
+                      <el-dropdown-item command="toggle-status">
+                        <el-icon><SwitchButton /></el-icon>
+                        {{ isRoleActive(role) ? "关闭" : "开启" }}
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        command="set-default"
+                        :disabled="role.is_default"
+                      >
+                        <el-icon><Star /></el-icon>
+                        {{ role.is_default ? "已默认" : "设为默认" }}
+                      </el-dropdown-item>
+                      <el-dropdown-item command="delete" divided>
+                        <el-icon><Delete /></el-icon>
+                        删除
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
+            </template>
+
+            <div class="role-content">
+              <p class="description">{{ role.description || "暂无描述" }}</p>
+
+              <div class="role-config">
+                <el-tag
+                  size="small"
+                  :type="isRoleActive(role) ? 'success' : 'info'"
+                >
+                  {{ isRoleActive(role) ? "开启" : "关闭" }}
+                </el-tag>
+                <el-tag v-if="role.is_default" size="small" type="warning"
+                  >默认角色</el-tag
+                >
+                <el-tag size="small" type="primary"
+                  >LLM: {{ role.llm_config_id || "默认" }}</el-tag
+                >
+                <el-tag size="small" type="success"
+                  >TTS: {{ role.tts_config_id || "默认" }}</el-tag
+                >
+                <el-tag v-if="role.voice" size="small" type="warning"
+                  >音色: {{ role.voice }}</el-tag
+                >
+              </div>
+
+              <div class="role-prompt">
+                <p class="prompt-label">Prompt</p>
+                <p class="prompt-text">{{ role.prompt || "未设置提示词" }}</p>
+              </div>
             </div>
-          </template>
+          </el-card>
+        </el-col>
+      </el-row>
+    </div>
 
-          <div class="role-content">
-            <p class="description">{{ role.description || '暂无描述' }}</p>
-
-            <div class="role-config">
-              <el-tag size="small" :type="isRoleActive(role) ? 'success' : 'info'">
-                {{ isRoleActive(role) ? '开启' : '关闭' }}
-              </el-tag>
-              <el-tag v-if="role.is_default" size="small" type="warning">默认角色</el-tag>
-              <el-tag size="small" type="primary">LLM: {{ role.llm_config_id || '默认' }}</el-tag>
-              <el-tag size="small" type="success">TTS: {{ role.tts_config_id || '默认' }}</el-tag>
-              <el-tag v-if="role.voice" size="small" type="warning">音色: {{ role.voice }}</el-tag>
-            </div>
-
-            <div class="role-prompt">
-              <p class="prompt-label">Prompt</p>
-              <p class="prompt-text">{{ role.prompt || '未设置提示词' }}</p>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-empty v-if="!loading && roles.length === 0" description="暂无全局角色，点击右上角创建">
-      <el-button type="primary" @click="showCreateDialog = true">创建第一个全局角色</el-button>
+    <el-empty
+      v-if="!loading && roles.length === 0"
+      description="暂无全局角色，点击右上角创建"
+    >
+      <el-button type="primary" @click="showCreateDialog = true"
+        >创建第一个全局角色</el-button
+      >
     </el-empty>
 
     <el-dialog
@@ -76,12 +106,7 @@
       width="800px"
       @close="handleDialogClose"
     >
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        label-width="120px"
-      >
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
         <div class="dialog-sections">
           <section class="dialog-section">
             <h4 class="dialog-section-title">基本信息</h4>
@@ -126,7 +151,8 @@
               />
               <div class="prompt-tips">
                 <el-text size="small" type="info">
-                  提示：可以使用 &#123;&#123;assistant_name&#125;&#125; 作为智能体名称的占位符
+                  提示：可以使用 &#123;&#123;assistant_name&#125;&#125;
+                  作为智能体名称的占位符
                 </el-text>
               </div>
             </el-form-item>
@@ -137,7 +163,12 @@
           <section class="dialog-section">
             <h4 class="dialog-section-title">模型配置</h4>
             <el-form-item label="LLM配置">
-              <el-select v-model="form.llm_config_id" placeholder="请选择LLM配置（可选）" clearable style="width: 100%">
+              <el-select
+                v-model="form.llm_config_id"
+                placeholder="请选择LLM配置（可选）"
+                clearable
+                style="width: 100%"
+              >
                 <el-option
                   v-for="config in llmConfigs"
                   :key="config.id"
@@ -146,7 +177,13 @@
                   :disabled="!config.enabled"
                 >
                   <span>{{ config.name }}</span>
-                  <el-tag v-if="config.is_default" size="small" type="success" style="margin-left: 8px">默认</el-tag>
+                  <el-tag
+                    v-if="config.is_default"
+                    size="small"
+                    type="success"
+                    style="margin-left: 8px"
+                    >默认</el-tag
+                  >
                 </el-option>
               </el-select>
               <div class="form-tip">
@@ -170,7 +207,13 @@
                   :disabled="!config.enabled"
                 >
                   <span>{{ config.name }}</span>
-                  <el-tag v-if="config.is_default" size="small" type="success" style="margin-left: 8px">默认</el-tag>
+                  <el-tag
+                    v-if="config.is_default"
+                    size="small"
+                    type="success"
+                    style="margin-left: 8px"
+                    >默认</el-tag
+                  >
                 </el-option>
               </el-select>
               <div class="form-tip">
@@ -198,11 +241,16 @@
                   :value="voice.value"
                 >
                   <span>{{ voice.label }}</span>
-                  <span style="color: #8492a6; font-size: 13px; margin-left: 8px;">{{ voice.value }}</span>
+                  <span
+                    style="color: #8492a6; font-size: 13px; margin-left: 8px"
+                    >{{ voice.value }}</span
+                  >
                 </el-option>
               </el-select>
               <div class="form-tip">
-                <el-text size="small" type="info">根据当前TTS配置自动加载音色列表，可搜索或手动输入自定义值</el-text>
+                <el-text size="small" type="info"
+                  >根据当前TTS配置自动加载音色列表，可搜索或手动输入自定义值</el-text
+                >
               </div>
             </el-form-item>
           </section>
@@ -220,403 +268,425 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, MoreFilled, Edit, CopyDocument, Delete, SwitchButton, Star } from '@element-plus/icons-vue'
-import api from '../../utils/api'
+import { ref, reactive, onMounted } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import {
+  Plus,
+  MoreFilled,
+  Edit,
+  CopyDocument,
+  Delete,
+  SwitchButton,
+  Star,
+} from "@element-plus/icons-vue";
+import api from "../../utils/api";
 
-const roles = ref([])
-const loading = ref(false)
-const saving = ref(false)
-const showCreateDialog = ref(false)
-const editingRole = ref(null)
-const formRef = ref()
+const roles = ref([]);
+const loading = ref(false);
+const saving = ref(false);
+const showCreateDialog = ref(false);
+const editingRole = ref(null);
+const formRef = ref();
 
-const llmConfigs = ref([])
-const ttsConfigs = ref([])
-const availableVoices = ref([])
-const filteredVoices = ref([])
-const voiceLoading = ref(false)
-const previousTtsConfigId = ref(null)
+const llmConfigs = ref([]);
+const ttsConfigs = ref([]);
+const availableVoices = ref([]);
+const filteredVoices = ref([]);
+const voiceLoading = ref(false);
+const previousTtsConfigId = ref(null);
 
 const form = reactive({
-  name: '',
-  description: '',
-  prompt: '',
+  name: "",
+  description: "",
+  prompt: "",
   llm_config_id: null,
   tts_config_id: null,
-  voice: '',
-  status: 'active',
+  voice: "",
+  status: "active",
   sort_order: 0,
-  is_default: false
-})
+  is_default: false,
+});
 
 const rules = {
-  name: [{ required: true, message: '请输入角色名称', trigger: 'blur' }],
-  prompt: [{ required: true, message: '请输入系统提示词', trigger: 'blur' }]
-}
+  name: [{ required: true, message: "请输入角色名称", trigger: "blur" }],
+  prompt: [{ required: true, message: "请输入系统提示词", trigger: "blur" }],
+};
 
-const isRoleActive = (role) => role?.status !== 'inactive'
+const isRoleActive = (role) => role?.status !== "inactive";
 
 const loadRoles = async () => {
-  loading.value = true
+  loading.value = true;
   try {
-    const response = await api.get('/admin/roles/global')
-    roles.value = response.data.data || []
+    const response = await api.get("/admin/roles/global");
+    roles.value = response.data.data || [];
   } catch (error) {
-    ElMessage.error('加载角色失败')
+    ElMessage.error("加载角色失败");
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 
 const loadConfigs = async () => {
   try {
     const [llmRes, ttsRes] = await Promise.all([
-      api.get('/admin/llm-configs'),
-      api.get('/admin/tts-configs')
-    ])
-    llmConfigs.value = llmRes.data.data || []
-    ttsConfigs.value = ttsRes.data.data || []
+      api.get("/admin/llm-configs"),
+      api.get("/admin/tts-configs"),
+    ]);
+    llmConfigs.value = llmRes.data.data || [];
+    ttsConfigs.value = ttsRes.data.data || [];
   } catch (error) {
-    console.error('加载配置列表失败', error)
+    console.error("加载配置列表失败", error);
   }
-}
+};
 
 const handleCardAction = (command, role) => {
   switch (command) {
-    case 'edit':
-      editRole(role)
-      break
-    case 'duplicate':
-      duplicateRole(role)
-      break
-    case 'toggle-status':
-      toggleRoleStatus(role)
-      break
-    case 'set-default':
-      setDefaultRole(role)
-      break
-    case 'delete':
-      deleteRole(role.id)
-      break
+    case "edit":
+      editRole(role);
+      break;
+    case "duplicate":
+      duplicateRole(role);
+      break;
+    case "toggle-status":
+      toggleRoleStatus(role);
+      break;
+    case "set-default":
+      setDefaultRole(role);
+      break;
+    case "delete":
+      deleteRole(role.id);
+      break;
   }
-}
+};
 
 const clearVoiceOptions = () => {
-  availableVoices.value = []
-  filteredVoices.value = []
-}
+  availableVoices.value = [];
+  filteredVoices.value = [];
+};
 
 const filterVoice = (val) => {
   if (!val) {
-    filteredVoices.value = availableVoices.value
-    return
+    filteredVoices.value = availableVoices.value;
+    return;
   }
 
-  const keyword = val.toLowerCase()
-  filteredVoices.value = availableVoices.value.filter((voice) =>
-    voice.label.toLowerCase().includes(keyword) || voice.value.toLowerCase().includes(keyword)
-  )
-}
+  const keyword = val.toLowerCase();
+  filteredVoices.value = availableVoices.value.filter(
+    (voice) =>
+      voice.label.toLowerCase().includes(keyword) ||
+      voice.value.toLowerCase().includes(keyword),
+  );
+};
 
 const loadVoices = async (provider) => {
   if (!provider) {
-    clearVoiceOptions()
-    return
+    clearVoiceOptions();
+    return;
   }
 
-  voiceLoading.value = true
+  voiceLoading.value = true;
   try {
-    const params = { provider }
+    const params = { provider };
     if (form.tts_config_id) {
-      params.config_id = form.tts_config_id
+      params.config_id = form.tts_config_id;
     }
-    const response = await api.get('/user/voice-options', { params })
-    availableVoices.value = response.data.data || []
-    filteredVoices.value = availableVoices.value
+    const response = await api.get("/user/voice-options", { params });
+    availableVoices.value = response.data.data || [];
+    filteredVoices.value = availableVoices.value;
   } catch (error) {
-    clearVoiceOptions()
-    console.error('加载音色列表失败', error)
+    clearVoiceOptions();
+    console.error("加载音色列表失败", error);
   } finally {
-    voiceLoading.value = false
+    voiceLoading.value = false;
   }
-}
+};
 
 const handleTtsConfigChange = async () => {
-  let previousProvider = null
+  let previousProvider = null;
   if (previousTtsConfigId.value) {
-    const prevConfig = ttsConfigs.value.find((config) => config.config_id === previousTtsConfigId.value)
-    previousProvider = prevConfig?.provider || null
+    const prevConfig = ttsConfigs.value.find(
+      (config) => config.config_id === previousTtsConfigId.value,
+    );
+    previousProvider = prevConfig?.provider || null;
   }
 
   if (!form.tts_config_id) {
-    form.voice = ''
-    previousTtsConfigId.value = null
-    clearVoiceOptions()
-    return
+    form.voice = "";
+    previousTtsConfigId.value = null;
+    clearVoiceOptions();
+    return;
   }
 
-  const ttsConfig = ttsConfigs.value.find((config) => config.config_id === form.tts_config_id)
+  const ttsConfig = ttsConfigs.value.find(
+    (config) => config.config_id === form.tts_config_id,
+  );
   if (!ttsConfig || !ttsConfig.provider) {
-    form.voice = ''
-    previousTtsConfigId.value = form.tts_config_id
-    clearVoiceOptions()
-    return
+    form.voice = "";
+    previousTtsConfigId.value = form.tts_config_id;
+    clearVoiceOptions();
+    return;
   }
 
   if (previousProvider && previousProvider !== ttsConfig.provider) {
-    form.voice = ''
+    form.voice = "";
   }
 
-  await loadVoices(ttsConfig.provider)
+  await loadVoices(ttsConfig.provider);
 
   if (form.voice && availableVoices.value.length > 0) {
-    const voiceExists = availableVoices.value.some((voice) => voice.value === form.voice)
+    const voiceExists = availableVoices.value.some(
+      (voice) => voice.value === form.voice,
+    );
     if (!voiceExists) {
-      form.voice = ''
+      form.voice = "";
     }
   }
 
-  previousTtsConfigId.value = form.tts_config_id
-}
+  previousTtsConfigId.value = form.tts_config_id;
+};
 
 const editRole = (role) => {
-  editingRole.value = role
+  editingRole.value = role;
   Object.assign(form, {
     name: role.name,
-    description: role.description || '',
-    prompt: role.prompt || '',
+    description: role.description || "",
+    prompt: role.prompt || "",
     llm_config_id: role.llm_config_id || null,
     tts_config_id: role.tts_config_id || null,
-    voice: role.voice || '',
-    status: role.status || 'active',
+    voice: role.voice || "",
+    status: role.status || "active",
     sort_order: role.sort_order || 0,
-    is_default: role.is_default || false
-  })
-  previousTtsConfigId.value = form.tts_config_id
-  handleTtsConfigChange()
-  showCreateDialog.value = true
-}
+    is_default: role.is_default || false,
+  });
+  previousTtsConfigId.value = form.tts_config_id;
+  handleTtsConfigChange();
+  showCreateDialog.value = true;
+};
 
 const duplicateRole = (role) => {
-  editingRole.value = null
+  editingRole.value = null;
   Object.assign(form, {
     name: `${role.name} (副本)`,
-    description: role.description || '',
-    prompt: role.prompt || '',
+    description: role.description || "",
+    prompt: role.prompt || "",
     llm_config_id: role.llm_config_id || null,
     tts_config_id: role.tts_config_id || null,
-    voice: role.voice || '',
-    status: role.status || 'active',
+    voice: role.voice || "",
+    status: role.status || "active",
     sort_order: role.sort_order || 0,
-    is_default: false
-  })
-  previousTtsConfigId.value = form.tts_config_id
-  handleTtsConfigChange()
-  showCreateDialog.value = true
-}
+    is_default: false,
+  });
+  previousTtsConfigId.value = form.tts_config_id;
+  handleTtsConfigChange();
+  showCreateDialog.value = true;
+};
 
 const handleSave = async () => {
-  if (!formRef.value) return
+  if (!formRef.value) return;
 
   await formRef.value.validate(async (valid) => {
     if (valid) {
-      saving.value = true
+      saving.value = true;
       try {
-        const data = { ...form }
+        const data = { ...form };
 
         if (editingRole.value) {
-          await api.put(`/admin/roles/global/${editingRole.value.id}`, data)
-          ElMessage.success('更新成功')
+          await api.put(`/admin/roles/global/${editingRole.value.id}`, data);
+          ElMessage.success("更新成功");
         } else {
-          await api.post('/admin/roles/global', data)
-          ElMessage.success('创建成功')
+          await api.post("/admin/roles/global", data);
+          ElMessage.success("创建成功");
         }
 
-        showCreateDialog.value = false
-        loadRoles()
+        showCreateDialog.value = false;
+        loadRoles();
       } catch (error) {
-        ElMessage.error('保存失败: ' + (error.response?.data?.error || error.message))
+        ElMessage.error(
+          "保存失败: " + (error.response?.data?.error || error.message),
+        );
       } finally {
-        saving.value = false
+        saving.value = false;
       }
     }
-  })
-}
+  });
+};
 
 const toggleRoleStatus = async (role) => {
-  if (!role?.id) return
+  if (!role?.id) return;
 
-  const action = isRoleActive(role) ? '关闭' : '开启'
+  const action = isRoleActive(role) ? "关闭" : "开启";
   try {
-    await api.patch(`/admin/roles/global/${role.id}/toggle`)
-    ElMessage.success(`角色${action}成功`)
-    await loadRoles()
+    await api.patch(`/admin/roles/global/${role.id}/toggle`);
+    ElMessage.success(`角色${action}成功`);
+    await loadRoles();
   } catch (error) {
-    ElMessage.error('状态切换失败: ' + (error.response?.data?.error || error.message))
+    ElMessage.error(
+      "状态切换失败: " + (error.response?.data?.error || error.message),
+    );
   }
-}
+};
 
 const setDefaultRole = async (role) => {
-  if (!role?.id || role.is_default) return
+  if (!role?.id || role.is_default) return;
 
   try {
-    await api.patch(`/admin/roles/global/${role.id}/default`)
-    ElMessage.success('已设为默认角色')
-    await loadRoles()
+    await api.patch(`/admin/roles/global/${role.id}/default`);
+    ElMessage.success("已设为默认角色");
+    await loadRoles();
   } catch (error) {
-    ElMessage.error('设置默认失败: ' + (error.response?.data?.error || error.message))
+    ElMessage.error(
+      "设置默认失败: " + (error.response?.data?.error || error.message),
+    );
   }
-}
+};
 
 const deleteRole = async (id) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个全局角色吗？', '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
+    await ElMessageBox.confirm("确定要删除这个全局角色吗？", "提示", {
+      confirmButtonText: "确定",
+      cancelButtonText: "取消",
+      type: "warning",
+    });
 
-    await api.delete(`/admin/roles/global/${id}`)
-    ElMessage.success('删除成功')
-    loadRoles()
+    await api.delete(`/admin/roles/global/${id}`);
+    ElMessage.success("删除成功");
+    loadRoles();
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error('删除失败')
+    if (error !== "cancel") {
+      ElMessage.error("删除失败");
     }
   }
-}
+};
 
 const resetForm = () => {
-  editingRole.value = null
+  editingRole.value = null;
   Object.assign(form, {
-    name: '',
-    description: '',
-    prompt: '',
+    name: "",
+    description: "",
+    prompt: "",
     llm_config_id: null,
     tts_config_id: null,
-    voice: '',
-    status: 'active',
+    voice: "",
+    status: "active",
     sort_order: 0,
-    is_default: false
-  })
-  previousTtsConfigId.value = null
-  clearVoiceOptions()
-}
+    is_default: false,
+  });
+  previousTtsConfigId.value = null;
+  clearVoiceOptions();
+};
 
 const handleDialogClose = () => {
-  showCreateDialog.value = false
-  resetForm()
+  showCreateDialog.value = false;
+  resetForm();
   if (formRef.value) {
-    formRef.value.resetFields()
+    formRef.value.resetFields();
   }
-}
+};
 
 onMounted(() => {
-  loadRoles()
-  loadConfigs()
-})
+  loadRoles();
+  loadConfigs();
+});
 </script>
 
 <style scoped>
-.roles-page {
-  padding: 20px;
+.admin-config {
+  padding: 24px;
 }
 
 .page-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .page-header h2 {
   margin: 0;
-  color: #333;
+  color: #1f2937;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
-.roles-grid {
-  align-items: stretch;
+.header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.roles-grid-container {
+  margin-top: 8px;
 }
 
 .role-col {
-  display: flex;
-  min-width: 0;
+  margin-bottom: 24px;
 }
 
 .role-card {
-  margin-bottom: 20px;
-  width: 100%;
-  max-width: 440px;
-  border-radius: 12px;
-  border: 1px solid #ebeef5;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  transition: all 0.3s ease;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .role-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.05);
+  border-color: var(--el-color-primary-light-5);
 }
 
-:deep(.role-card .el-card__header) {
-  padding: 12px 14px;
+:deep(.el-card__header) {
+  padding: 16px 20px;
+  border-bottom: 1px solid #f1f5f9;
 }
 
-:deep(.role-card .el-card__body) {
-  padding: 12px 14px 14px;
+:deep(.el-card__body) {
+  padding: 20px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
 }
 
 .role-name {
-  font-weight: 700;
-  font-size: 15px;
+  font-weight: 600;
+  font-size: 16px;
   color: #111827;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .more-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   cursor: pointer;
-  font-size: 16px;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
   color: #6b7280;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  font-size: 18px;
 }
 
 .more-icon:hover {
-  color: #1f2937;
   background: #f3f4f6;
+  color: #111827;
 }
 
 .role-content {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 170px;
+  gap: 16px;
+  height: 100%;
 }
 
 .description {
-  color: #4b5563;
+  color: #6b7280;
   font-size: 14px;
+  line-height: 1.5;
   margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
 }
 
 .role-config {
@@ -627,58 +697,35 @@ onMounted(() => {
 
 .role-prompt {
   margin-top: auto;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #f1f5f9;
   background: #f9fafb;
-  border-radius: 8px;
-  padding: 8px 10px;
+  border-radius: 12px;
+  padding: 12px;
 }
 
 .prompt-label {
   margin: 0 0 4px 0;
   color: #6b7280;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .prompt-text {
   margin: 0;
   color: #374151;
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 13px;
+  line-height: 1.6;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.prompt-tips {
-  margin-top: 4px;
-}
-
-.form-tip {
-  margin-top: 4px;
-}
-
-.dialog-sections {
-  display: flex;
-  flex-direction: column;
-}
-
-.dialog-section {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.dialog-section-title {
-  margin: 0 0 8px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #374151;
-}
-
-:deep(.dialog-sections .el-divider--horizontal) {
-  margin: 8px 0 16px;
+@media (max-width: 768px) {
+  .admin-config {
+    padding: 16px;
+  }
 }
 </style>

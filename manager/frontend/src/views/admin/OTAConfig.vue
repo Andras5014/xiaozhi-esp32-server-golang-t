@@ -32,30 +32,34 @@
         label-position="left"
       >
         <!-- 基础配置卡片 -->
-        <el-card class="config-card basic-config" shadow="hover">
+        <el-card class="config-card basic-config">
           <template #header>
             <div class="card-header">
               <el-icon class="card-icon"><Tools /></el-icon>
               <span class="card-title">基础配置</span>
             </div>
           </template>
-          
-          <el-form-item label="签名密钥" prop="signature_key" class="form-item full-width">
-            <el-input 
-              v-model="form.signature_key" 
+
+          <el-form-item
+            label="签名密钥"
+            prop="signature_key"
+            class="form-item full-width"
+          >
+            <el-input
+              v-model="form.signature_key"
               placeholder="请输入签名密钥"
-              size="large"
               :prefix-icon="Key"
               show-password
             />
             <div class="form-item-hint">
-              用来生成连接mqtt server的用户名和密码，必须与 mqtt server配置页面中的'签名密钥' 中的一致
+              用来生成连接mqtt server的用户名和密码，必须与 mqtt
+              server配置页面中的'签名密钥' 中的一致
             </div>
           </el-form-item>
         </el-card>
-        
+
         <!-- Test环境配置卡片 -->
-        <el-card class="config-card test-config" shadow="hover">
+        <el-card class="config-card test-config">
           <template #header>
             <div class="card-header">
               <el-icon class="card-icon test-icon"><Monitor /></el-icon>
@@ -63,67 +67,85 @@
               <el-tag type="warning" size="small">测试环境</el-tag>
             </div>
           </template>
-          
+
           <!-- WebSocket配置 -->
           <div class="config-section">
             <div class="section-title">
               <el-icon><Connection /></el-icon>
               <span>WebSocket配置</span>
-              <el-tooltip content="下发给终端连接的websocket地址" placement="top">
+              <el-tooltip
+                content="下发给终端连接的websocket地址"
+                placement="top"
+              >
                 <el-icon class="help-icon"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="form-grid">
-              <el-form-item label="WebSocket URL" prop="test.websocket.url" class="form-item full-width">
-                 <el-input 
-                   v-model="form.test.websocket.url" 
-                   placeholder="例如: ws://host:port/xiaozhi/v1/"
-                   size="large"
-                   :prefix-icon="Link"
-                 />
-               </el-form-item>
+              <el-form-item
+                label="WebSocket URL"
+                prop="test.websocket.url"
+                class="form-item full-width"
+              >
+                <el-input
+                  v-model="form.test.websocket.url"
+                  placeholder="例如: ws://host:port/xiaozhi/v1/"
+                  :prefix-icon="Link"
+                />
+              </el-form-item>
             </div>
           </div>
-          
+
           <!-- MQTT配置 -->
           <div class="config-section">
             <div class="section-title">
               <el-icon><Message /></el-icon>
               <span>MQTT配置</span>
-              <el-tooltip content="下发给终端mqtt连接(需要确保启用mqtt server和udp server),固件默认优先使用mqtt" placement="top">
+              <el-tooltip
+                content="下发给终端mqtt连接(需要确保启用mqtt server和udp server),固件默认优先使用mqtt"
+                placement="top"
+              >
                 <el-icon class="help-icon"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="form-grid">
               <el-form-item label="MQTT启用状态" class="form-item">
-                <el-switch 
-                  v-model="form.test.mqtt.enable" 
-                  size="large"
+                <el-switch
+                  v-model="form.test.mqtt.enable"
                   active-text="启用"
                   inactive-text="禁用"
                 />
               </el-form-item>
-               
-              <el-form-item label="MQTT端点" prop="test.mqtt.endpoint" class="form-item" v-if="form.test.mqtt.enable">
-                <el-input 
-                  v-model="form.test.mqtt.endpoint" 
+
+              <el-form-item
+                label="MQTT端点"
+                prop="test.mqtt.endpoint"
+                class="form-item"
+                v-if="form.test.mqtt.enable"
+              >
+                <el-input
+                  v-model="form.test.mqtt.endpoint"
                   placeholder="请输入Test环境MQTT端点，格式：ip:port"
-                  size="large"
                   :prefix-icon="Link"
                 />
               </el-form-item>
             </div>
           </div>
           <div class="card-actions">
-            <el-button type="warning" size="large" :loading="otaTestingTest" @click="testOtaEnv('test')" class="env-test-btn">
+            <el-button
+              type="warning"
+              size="large"
+              :loading="otaTestingTest"
+              @click="testOtaEnv('test')"
+              class="env-test-btn"
+            >
               <el-icon><CircleCheck /></el-icon>
               测试 Test 环境
             </el-button>
           </div>
         </el-card>
-        
+
         <!-- External环境配置卡片 -->
-        <el-card class="config-card external-config" shadow="hover">
+        <el-card class="config-card external-config">
           <template #header>
             <div class="card-header">
               <el-icon class="card-icon external-icon"><Platform /></el-icon>
@@ -131,75 +153,91 @@
               <el-tag type="success" size="small">生产环境</el-tag>
             </div>
           </template>
-          
+
           <!-- WebSocket配置 -->
           <div class="config-section">
             <div class="section-title">
               <el-icon><Connection /></el-icon>
               <span>WebSocket配置</span>
-              <el-tooltip content="下发给终端连接的websocket地址" placement="top">
+              <el-tooltip
+                content="下发给终端连接的websocket地址"
+                placement="top"
+              >
                 <el-icon class="help-icon"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="form-grid">
-              <el-form-item label="WebSocket URL" prop="external.websocket.url" class="form-item full-width">
-                 <el-input 
-                   v-model="form.external.websocket.url" 
-                   placeholder="例如: ws://host:port/xiaozhi/v1/"
-                   size="large"
-                   :prefix-icon="Link"
-                 />
-               </el-form-item>
+              <el-form-item
+                label="WebSocket URL"
+                prop="external.websocket.url"
+                class="form-item full-width"
+              >
+                <el-input
+                  v-model="form.external.websocket.url"
+                  placeholder="例如: ws://host:port/xiaozhi/v1/"
+                  :prefix-icon="Link"
+                />
+              </el-form-item>
             </div>
           </div>
-          
+
           <!-- MQTT配置 -->
           <div class="config-section">
             <div class="section-title">
               <el-icon><Message /></el-icon>
               <span>MQTT配置</span>
-              <el-tooltip content="下发给终端mqtt连接(需要确保启用mqtt server和udp server),固件默认优先使用mqtt" placement="top">
+              <el-tooltip
+                content="下发给终端mqtt连接(需要确保启用mqtt server和udp server),固件默认优先使用mqtt"
+                placement="top"
+              >
                 <el-icon class="help-icon"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="form-grid">
               <el-form-item label="MQTT启用状态" class="form-item">
-                <el-switch 
-                  v-model="form.external.mqtt.enable" 
-                  size="large"
+                <el-switch
+                  v-model="form.external.mqtt.enable"
                   active-text="启用"
                   inactive-text="禁用"
                 />
               </el-form-item>
-               
-              <el-form-item label="MQTT端点" prop="external.mqtt.endpoint" class="form-item" v-if="form.external.mqtt.enable">
-                <el-input 
-                  v-model="form.external.mqtt.endpoint" 
+
+              <el-form-item
+                label="MQTT端点"
+                prop="external.mqtt.endpoint"
+                class="form-item"
+                v-if="form.external.mqtt.enable"
+              >
+                <el-input
+                  v-model="form.external.mqtt.endpoint"
                   placeholder="请输入External环境MQTT端点，格式：ip:port"
-                  size="large"
                   :prefix-icon="Link"
                 />
               </el-form-item>
             </div>
           </div>
           <div class="card-actions">
-            <el-button type="warning" size="large" :loading="otaTestingExternal" @click="testOtaEnv('external')" class="env-test-btn">
+            <el-button
+              type="warning"
+              size="large"
+              :loading="otaTestingExternal"
+              @click="testOtaEnv('external')"
+              class="env-test-btn"
+            >
               <el-icon><CircleCheck /></el-icon>
               测试 External 环境
             </el-button>
           </div>
         </el-card>
-        
+
         <!-- 操作按钮 -->
         <div class="action-section">
-          <el-button 
-            type="primary" 
-            @click="saveConfig" 
-             :loading="saving"
+          <el-button
+            type="primary"
+            @click="saveConfig"
             size="large"
-            class="save-button"
+            :loading="saving"
           >
-            <el-icon><Check /></el-icon>
             保存配置
           </el-button>
         </div>
@@ -209,444 +247,462 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { 
-  Setting, Tools, Monitor, Platform, Connection, Message, 
-  Edit, Key, Link, User, Lock, Check, QuestionFilled, CircleCheck 
-} from '@element-plus/icons-vue'
-import api from '@/utils/api'
-import { testWithData } from '@/utils/configTest'
+import { ref, reactive, onMounted, watch } from "vue";
+import { ElMessage } from "element-plus";
+import {
+  Setting,
+  Tools,
+  Monitor,
+  Platform,
+  Connection,
+  Message,
+  Edit,
+  Key,
+  Link,
+  User,
+  Lock,
+  Check,
+  QuestionFilled,
+  CircleCheck,
+} from "@element-plus/icons-vue";
+import api from "@/utils/api";
+import { testWithData } from "@/utils/configTest";
 
-const loading = ref(false)
-const saving = ref(false)
-const otaTestingTest = ref(false)
-const otaTestingExternal = ref(false)
-const configId = ref(null)
-const formRef = ref()
+const loading = ref(false);
+const saving = ref(false);
+const otaTestingTest = ref(false);
+const otaTestingExternal = ref(false);
+const configId = ref(null);
+const formRef = ref();
 
 const form = reactive({
-  signature_key: 'xiaozhi_ota_signature_key',
+  signature_key: "xiaozhi_ota_signature_key",
   test: {
     websocket: {
-      url: 'ws://127.0.0.1:8989/xiaozhi/v1/'
+      url: "ws://127.0.0.1:8989/xiaozhi/v1/",
     },
     mqtt: {
       enable: true,
-      endpoint: '127.0.0.1:1883'
-    }
+      endpoint: "127.0.0.1:1883",
+    },
   },
   external: {
     websocket: {
-      url: 'ws://127.0.0.1:8989/xiaozhi/v1/'
+      url: "ws://127.0.0.1:8989/xiaozhi/v1/",
     },
     mqtt: {
       enable: false,
-      endpoint: '127.0.0.1:1883'
-    }
-  }
-})
+      endpoint: "127.0.0.1:1883",
+    },
+  },
+});
 
 const generateConfig = () => {
-  return JSON.stringify({
-    signature_key: form.signature_key,
-    test: {
-      websocket: {
-        url: form.test.websocket.url
+  return JSON.stringify(
+    {
+      signature_key: form.signature_key,
+      test: {
+        websocket: {
+          url: form.test.websocket.url,
+        },
+        mqtt: {
+          enable: form.test.mqtt.enable,
+          endpoint: form.test.mqtt.endpoint,
+        },
       },
-      mqtt: {
-        enable: form.test.mqtt.enable,
-        endpoint: form.test.mqtt.endpoint
-      }
+      external: {
+        websocket: {
+          url: form.external.websocket.url,
+        },
+        mqtt: {
+          enable: form.external.mqtt.enable,
+          endpoint: form.external.mqtt.endpoint,
+        },
+      },
     },
-    external: {
-      websocket: {
-        url: form.external.websocket.url
-      },
-      mqtt: {
-        enable: form.external.mqtt.enable,
-        endpoint: form.external.mqtt.endpoint
-      }
-    }
-  }, null, 2)
-}
+    null,
+    2,
+  );
+};
 
 const rules = {
   signature_key: [
-    { required: true, message: '请输入签名密钥', trigger: 'blur' }
+    { required: true, message: "请输入签名密钥", trigger: "blur" },
   ],
-  'test.websocket.url': [
-    { required: true, message: '请输入Test环境WebSocket URL', trigger: 'blur' }
+  "test.websocket.url": [
+    { required: true, message: "请输入Test环境WebSocket URL", trigger: "blur" },
   ],
-  'test.mqtt.endpoint': [
+  "test.mqtt.endpoint": [
     {
       validator: (rule, value, callback) => {
         if (form.test.mqtt.enable && !value) {
-          callback(new Error('启用MQTT时端点不能为空'))
+          callback(new Error("启用MQTT时端点不能为空"));
         } else {
-          callback()
+          callback();
         }
       },
-      trigger: 'blur'
-    }
+      trigger: "blur",
+    },
   ],
-  'external.websocket.url': [
-    { required: true, message: '请输入External环境WebSocket URL', trigger: 'blur' }
+  "external.websocket.url": [
+    {
+      required: true,
+      message: "请输入External环境WebSocket URL",
+      trigger: "blur",
+    },
   ],
-  'external.mqtt.endpoint': [
+  "external.mqtt.endpoint": [
     {
       validator: (rule, value, callback) => {
         if (form.external.mqtt.enable && !value) {
-          callback(new Error('启用MQTT时端点不能为空'))
+          callback(new Error("启用MQTT时端点不能为空"));
         } else {
-          callback()
+          callback();
         }
       },
-      trigger: 'blur'
-    }
-  ]
-}
+      trigger: "blur",
+    },
+  ],
+};
 
 const loadConfig = async () => {
-  loading.value = true
+  loading.value = true;
   try {
-    const response = await api.get('/admin/ota-configs')
-    const configs = response.data.data || []
-    
+    const response = await api.get("/admin/ota-configs");
+    const configs = response.data.data || [];
+
     if (configs.length > 0) {
-      const config = configs[0]
-      configId.value = config.id
-      
+      const config = configs[0];
+      configId.value = config.id;
+
       try {
-        const configData = JSON.parse(config.json_data || '{}')
-        form.signature_key = configData.signature_key || 'xiaozhi_ota_signature_key'
-        
+        const configData = JSON.parse(config.json_data || "{}");
+        form.signature_key =
+          configData.signature_key || "xiaozhi_ota_signature_key";
+
         // Test环境配置
         if (configData.test) {
-          form.test.websocket.url = configData.test.websocket?.url || 'ws://127.0.0.1:8989/xiaozhi/v1/'
-          form.test.mqtt.enable = configData.test.mqtt?.enable !== undefined ? configData.test.mqtt.enable : true
-          form.test.mqtt.endpoint = configData.test.mqtt?.endpoint || '127.0.0.1:1883'
+          form.test.websocket.url =
+            configData.test.websocket?.url || "ws://127.0.0.1:8989/xiaozhi/v1/";
+          form.test.mqtt.enable =
+            configData.test.mqtt?.enable !== undefined
+              ? configData.test.mqtt.enable
+              : true;
+          form.test.mqtt.endpoint =
+            configData.test.mqtt?.endpoint || "127.0.0.1:1883";
         }
-        
+
         // External环境配置
         if (configData.external) {
-          form.external.websocket.url = configData.external.websocket?.url || 'ws://127.0.0.1:8989/xiaozhi/v1/'
-          form.external.mqtt.enable = configData.external.mqtt?.enable !== undefined ? configData.external.mqtt.enable : false
-          form.external.mqtt.endpoint = configData.external.mqtt?.endpoint || '127.0.0.1:1883'
+          form.external.websocket.url =
+            configData.external.websocket?.url ||
+            "ws://127.0.0.1:8989/xiaozhi/v1/";
+          form.external.mqtt.enable =
+            configData.external.mqtt?.enable !== undefined
+              ? configData.external.mqtt.enable
+              : false;
+          form.external.mqtt.endpoint =
+            configData.external.mqtt?.endpoint || "127.0.0.1:1883";
         }
       } catch (error) {
-        console.error('解析配置失败:', error)
-        ElMessage.error('配置格式错误')
+        console.error("解析配置失败:", error);
+        ElMessage.error("配置格式错误");
       }
     }
   } catch (error) {
-    ElMessage.error('加载配置失败')
+    ElMessage.error("加载配置失败");
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 
 const saveConfig = async () => {
-  if (!formRef.value) return
-  
+  if (!formRef.value) return;
+
   try {
-    await formRef.value.validate()
-    saving.value = true
-    
+    await formRef.value.validate();
+    saving.value = true;
+
     // 如果MQTT被禁用，清空端点值
     if (!form.test.mqtt.enable) {
-      form.test.mqtt.endpoint = ''
+      form.test.mqtt.endpoint = "";
     }
     if (!form.external.mqtt.enable) {
-      form.external.mqtt.endpoint = ''
+      form.external.mqtt.endpoint = "";
     }
-    
+
     const configData = {
-      name: 'OTA配置',
-      config_id: 'ota_ota_config',
-      provider: form.provider || 'default',
+      name: "OTA配置",
+      config_id: "ota_ota_config",
+      provider: form.provider || "default",
       json_data: generateConfig(),
       enabled: true,
-      is_default: true
-    }
-    
+      is_default: true,
+    };
+
     if (configId.value) {
-      await api.put(`/admin/ota-configs/${configId.value}`, configData)
-      ElMessage.success('配置更新成功')
+      await api.put(`/admin/ota-configs/${configId.value}`, configData);
+      ElMessage.success("配置更新成功");
     } else {
-      const response = await api.post('/admin/ota-configs', configData)
-      configId.value = response.data.data.id
-      ElMessage.success('配置创建成功')
+      const response = await api.post("/admin/ota-configs", configData);
+      configId.value = response.data.data.id;
+      ElMessage.success("配置创建成功");
     }
   } catch (error) {
     if (error.message) {
-      ElMessage.error('保存失败: ' + error.message)
+      ElMessage.error("保存失败: " + error.message);
     }
   } finally {
-    saving.value = false
+    saving.value = false;
   }
-}
+};
 
 // env: 'test' | 'external'，测试对应环境的 WebSocket 和 MQTT UDP（如果启用）
 const testOtaEnv = async (env) => {
-  const envConfig = env === 'test' ? form.test : form.external
-  const mqttEnabled = envConfig.mqtt.enable
+  const envConfig = env === "test" ? form.test : form.external;
+  const mqttEnabled = envConfig.mqtt.enable;
 
   const payload = {
     signature_key: form.signature_key,
     test: {
-      websocket: { url: env === 'test' ? form.test.websocket.url : '' },
-      mqtt: { enable: form.test.mqtt.enable, endpoint: form.test.mqtt.endpoint }
+      websocket: { url: env === "test" ? form.test.websocket.url : "" },
+      mqtt: {
+        enable: form.test.mqtt.enable,
+        endpoint: form.test.mqtt.endpoint,
+      },
     },
     external: {
-      websocket: { url: env === 'external' ? form.external.websocket.url : '' },
-      mqtt: { enable: form.external.mqtt.enable, endpoint: form.external.mqtt.endpoint }
-    }
-  }
-  const loadingRef = env === 'test' ? otaTestingTest : otaTestingExternal
-  loadingRef.value = true
+      websocket: { url: env === "external" ? form.external.websocket.url : "" },
+      mqtt: {
+        enable: form.external.mqtt.enable,
+        endpoint: form.external.mqtt.endpoint,
+      },
+    },
+  };
+  const loadingRef = env === "test" ? otaTestingTest : otaTestingExternal;
+  loadingRef.value = true;
   try {
     // 直接调用API获取原始响应，包含完整的websocket和mqtt_udp结果
-    const body = { types: ['ota'], data: { ota: { ota_ota_config: payload } } }
-    const res = await api.post('/admin/configs/test', body, { timeout: 30000 })
-    const data = res.data?.data ?? res.data
-    const otaResult = data?.ota?.ota_ota_config
+    const body = { types: ["ota"], data: { ota: { ota_ota_config: payload } } };
+    const res = await api.post("/admin/configs/test", body, { timeout: 30000 });
+    const data = res.data?.data ?? res.data;
+    const otaResult = data?.ota?.ota_ota_config;
 
-    const label = env === 'test' ? 'Test 环境' : 'External 环境'
+    const label = env === "test" ? "Test 环境" : "External 环境";
 
     if (!otaResult) {
-      ElMessage.error(`${label}：未返回测试结果`)
-      return
+      ElMessage.error(`${label}：未返回测试结果`);
+      return;
     }
 
     // 解析WebSocket结果
-    const wsResult = otaResult.websocket || {}
-    const wsOk = wsResult.ok || false
-    const wsMsg = wsResult.message || 'WebSocket测试失败'
-    const wsMs = wsResult.first_packet_ms
+    const wsResult = otaResult.websocket || {};
+    const wsOk = wsResult.ok || false;
+    const wsMsg = wsResult.message || "WebSocket测试失败";
+    const wsMs = wsResult.first_packet_ms;
 
     // 解析MQTT UDP结果
-    const mqttResult = otaResult.mqtt_udp
-    let mqttOk = true
-    let mqttMsg = ''
-    let mqttMs = 0
+    const mqttResult = otaResult.mqtt_udp;
+    let mqttOk = true;
+    let mqttMsg = "";
+    let mqttMs = 0;
 
     if (mqttEnabled && mqttResult) {
-      mqttOk = mqttResult.ok || false
-      mqttMsg = mqttResult.message || 'MQTT UDP测试失败'
-      mqttMs = mqttResult.first_packet_ms || 0
+      mqttOk = mqttResult.ok || false;
+      mqttMsg = mqttResult.message || "MQTT UDP测试失败";
+      mqttMs = mqttResult.first_packet_ms || 0;
     } else if (mqttEnabled) {
-      mqttOk = false
-      mqttMsg = 'MQTT UDP未返回结果'
+      mqttOk = false;
+      mqttMsg = "MQTT UDP未返回结果";
     }
 
     // 构建结果显示
-    let message = ''
+    let message = "";
     if (wsOk) {
-      message += `WebSocket: ${wsMsg}`
-      if (wsMs != null) message += ` (${wsMs}ms)`
+      message += `WebSocket: ${wsMsg}`;
+      if (wsMs != null) message += ` (${wsMs}ms)`;
     } else {
-      message += `WebSocket: ${wsMsg}`
+      message += `WebSocket: ${wsMsg}`;
     }
 
     if (mqttEnabled) {
-      message += ' | '
+      message += " | ";
       if (mqttOk) {
-        message += `MQTT UDP: ${mqttMsg}`
-        if (mqttMs != null) message += ` (${mqttMs}ms)`
+        message += `MQTT UDP: ${mqttMsg}`;
+        if (mqttMs != null) message += ` (${mqttMs}ms)`;
       } else {
-        message += `MQTT UDP: ${mqttMsg}`
+        message += `MQTT UDP: ${mqttMsg}`;
       }
     }
 
     if (wsOk && (!mqttEnabled || mqttOk)) {
-      ElMessage.success(`${label}：${message}`)
+      ElMessage.success(`${label}：${message}`);
     } else {
-      ElMessage.warning(`${label}：${message}`)
+      ElMessage.warning(`${label}：${message}`);
     }
   } catch (err) {
-    ElMessage.error(err.response?.data?.error || '测试请求失败')
+    ElMessage.error(err.response?.data?.error || "测试请求失败");
   } finally {
-    loadingRef.value = false
+    loadingRef.value = false;
   }
-}
+};
 
 // 监听provider变化，重置表单为默认值
-watch(() => form.provider, (newProvider) => {
-  if (newProvider) {
-    // 重置表单为默认值
-    form.signature_key = 'your_signature_key_here'
-    form.test = {
-      websocket: {
-        url: 'ws://127.0.0.1:8989/xiaozhi/v1/'
-      },
-      mqtt: {
-        enable: false,
-        endpoint: '127.0.0.1:1883'
-      }
+watch(
+  () => form.provider,
+  (newProvider) => {
+    if (newProvider) {
+      // 重置表单为默认值
+      form.signature_key = "your_signature_key_here";
+      form.test = {
+        websocket: {
+          url: "ws://127.0.0.1:8989/xiaozhi/v1/",
+        },
+        mqtt: {
+          enable: false,
+          endpoint: "127.0.0.1:1883",
+        },
+      };
+      form.external = {
+        websocket: {
+          url: "ws://127.0.0.1:8989/xiaozhi/v1/",
+        },
+        mqtt: {
+          enable: true,
+          endpoint: "127.0.0.1:1883",
+        },
+      };
     }
-    form.external = {
-      websocket: {
-        url: 'ws://127.0.0.1:8989/xiaozhi/v1/'
-      },
-      mqtt: {
-        enable: true,
-        endpoint: '127.0.0.1:1883'
-      }
-    }
-  }
-})
+  },
+);
 
 // 监听MQTT开关状态变化，重置相关验证
-watch(() => form.test.mqtt.enable, (enabled) => {
-  if (!enabled) {
-    // 当MQTT禁用时，清空端点并重置验证
-    form.test.mqtt.endpoint = ''
-    formRef.value?.clearValidate('test.mqtt.endpoint')
-  }
-})
+watch(
+  () => form.test.mqtt.enable,
+  (enabled) => {
+    if (!enabled) {
+      // 当MQTT禁用时，清空端点并重置验证
+      form.test.mqtt.endpoint = "";
+      formRef.value?.clearValidate("test.mqtt.endpoint");
+    }
+  },
+);
 
-watch(() => form.external.mqtt.enable, (enabled) => {
-  if (!enabled) {
-    // 当MQTT禁用时，清空端点并重置验证
-    form.external.mqtt.endpoint = ''
-    formRef.value?.clearValidate('external.mqtt.endpoint')
-  }
-})
+watch(
+  () => form.external.mqtt.enable,
+  (enabled) => {
+    if (!enabled) {
+      // 当MQTT禁用时，清空端点并重置验证
+      form.external.mqtt.endpoint = "";
+      formRef.value?.clearValidate("external.mqtt.endpoint");
+    }
+  },
+);
 
 const resetForm = () => {
-  editingConfig.value = null
-  form.provider = ''
-  form.signature_key = 'your_signature_key_here'
+  editingConfig.value = null;
+  form.provider = "";
+  form.signature_key = "your_signature_key_here";
   form.test = {
     websocket: {
-      url: 'ws://127.0.0.1:8989/xiaozhi/v1/'
+      url: "ws://127.0.0.1:8989/xiaozhi/v1/",
     },
     mqtt: {
       enable: false,
-      endpoint: '127.0.0.1:1883'
-    }
-  }
+      endpoint: "127.0.0.1:1883",
+    },
+  };
   form.external = {
     websocket: {
-      url: 'ws://127.0.0.1:8989/xiaozhi/v1/'
+      url: "ws://127.0.0.1:8989/xiaozhi/v1/",
     },
     mqtt: {
       enable: true,
-      endpoint: '127.0.0.1:1883'
-    }
-  }
-  
+      endpoint: "127.0.0.1:1883",
+    },
+  };
+
   // 清除表单验证状态
   if (formRef.value) {
-    formRef.value.clearValidate()
+    formRef.value.clearValidate();
   }
-}
+};
 
 onMounted(() => {
-  loadConfig()
-})
+  loadConfig();
+});
 </script>
 
 <style scoped>
 .ota-config {
   min-height: 100vh;
   background: #f8fafc;
-  padding: 0;
+  padding: 24px;
 }
 
 /* 页面标题区域 */
 .page-header {
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
-  padding: 2rem 0;
-  margin-bottom: 2rem;
+  margin-bottom: 24px;
 }
 
 .header-content {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 0 2rem;
 }
 
 .title-section {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  margin-bottom: 0.5rem;
+  gap: 16px;
+  margin-bottom: 8px;
 }
 
 .title-icon {
-  font-size: 2rem;
-  color: #667eea;
+  font-size: 32px;
+  color: #409eff;
 }
 
 .page-title {
-  font-size: 2.5rem;
+  font-size: 28px;
   font-weight: 700;
   color: #1f2937;
   margin: 0;
+  background: linear-gradient(135deg, #409eff 0%, #67c23a 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 /* 配置说明 */
 .config-description {
   max-width: 1200px;
-  margin: 0 auto 2rem;
-  padding: 0 2rem;
+  margin: 0 auto 24px;
 }
 
 /* 表单容器 */
 .form-container {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 0 2rem 2rem;
-}
-
-.config-form {
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
 }
 
 /* 配置卡片 */
 .config-card {
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
   background: #ffffff;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  transition: all 0.3s ease;
   overflow: hidden;
+  margin-bottom: 20px;
 }
 
-.config-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.15);
-}
-
-.config-card.basic-config {
-  border-left: 4px solid #3b82f6;
-}
-
-.config-card.test-config {
-  border-left: 4px solid #f59e0b;
-}
-
-.config-card.external-config {
-  border-left: 4px solid #10b981;
-}
-
+/* 卡片头部 */
 /* 卡片头部 */
 .card-header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  font-weight: 600;
-  font-size: 1.1rem;
-  color: #1f2937;
+  gap: 12px;
 }
 
 .card-icon {
-  font-size: 1.25rem;
+  font-size: 20px;
+  color: #409eff;
 }
 
 .card-icon.test-icon {
@@ -658,6 +714,9 @@ onMounted(() => {
 }
 
 .card-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
   flex: 1;
 }
 
@@ -697,27 +756,27 @@ onMounted(() => {
 .section-title {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 1rem;
+  gap: 8px;
+  font-size: 16px;
   font-weight: 600;
   color: #374151;
-  margin-bottom: 1rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 2px solid #e5e7eb;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #f1f5f9;
 }
 
 .section-title .el-icon {
-  color: #6366f1;
+  color: #409eff;
 }
 
 .help-icon {
   color: #9ca3af;
   cursor: help;
-  font-size: 0.875rem;
+  font-size: 14px;
 }
 
 .help-icon:hover {
-  color: #6366f1;
+  color: #409eff;
 }
 
 /* 表单项样式 */
@@ -732,68 +791,47 @@ onMounted(() => {
   line-height: 1.5;
 }
 
+:deep(.el-form-item) {
+  display: flex;
+  align-items: center;
+}
+
 :deep(.el-form-item__label) {
   font-weight: 500;
   color: #374151;
-  line-height: 1.5;
+  line-height: inherit;
+  display: flex !important;
+  align-items: center !important;
+  height: 100% !important;
 }
 
-:deep(.el-input) {
-  border-radius: 8px;
-}
-
-:deep(.el-input__wrapper) {
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  transition: all 0.3s ease;
-}
-
-:deep(.el-input__wrapper:hover) {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-:deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.25);
-}
-
-:deep(.el-input-number) {
-  width: 100%;
-}
-
-:deep(.el-input-number .el-input__wrapper) {
-  border-radius: 8px;
-}
-
-:deep(.el-switch) {
-  --el-switch-on-color: #10b981;
-  --el-switch-off-color: #d1d5db;
+:deep(.el-card__header) {
+  padding: 16px 24px;
 }
 
 /* 操作按钮区域 */
 .action-section {
   display: flex;
   justify-content: center;
-  padding: 2rem 0;
-  background: #ffffff;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  padding: 24px 0 48px;
 }
 
 .save-button {
-  padding: 12px 32px;
-  font-size: 1rem;
+  padding: 12px 48px;
+  font-size: 1.1rem;
   font-weight: 600;
-  border-radius: 8px;
-  background: #3b82f6;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #409eff 0%, #67c23a 100%);
   border: none;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.3);
   transition: all 0.3s ease;
+  color: white;
 }
 
 .save-button:hover {
-  background: #2563eb;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(64, 158, 255, 0.4);
+  opacity: 0.9;
 }
 
 .save-button:active {
@@ -803,7 +841,7 @@ onMounted(() => {
 /* 响应式设计 */
 @media (max-width: 1024px) {
   .page-title {
-    font-size: 2.2rem;
+    font-size: 26px;
   }
 }
 
@@ -811,21 +849,21 @@ onMounted(() => {
   .header-content {
     padding: 0 1rem;
   }
-  
+
   .form-container {
     padding: 0 1rem 1rem;
   }
-  
+
   .page-title {
-    font-size: 1.6rem;
+    font-size: 24px;
     max-width: calc(100vw - 5rem);
   }
-  
+
   .form-grid {
     grid-template-columns: 1fr;
     gap: 1rem;
   }
-  
+
   .config-form {
     gap: 1.5rem;
   }
@@ -835,12 +873,12 @@ onMounted(() => {
   .title-section {
     gap: 0.75rem;
   }
-  
+
   .page-title {
     font-size: 1.6rem;
     max-width: calc(100vw - 5rem);
   }
-  
+
   .form-grid {
     grid-template-columns: 1fr;
     gap: 1rem;
@@ -853,9 +891,9 @@ onMounted(() => {
     align-items: flex-start;
     gap: 0.5rem;
   }
-  
+
   .page-title {
-    font-size: 1.5rem;
+    font-size: 22px;
     max-width: 100%;
     white-space: normal;
     word-break: keep-all;

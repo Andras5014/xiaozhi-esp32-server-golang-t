@@ -1,77 +1,81 @@
 <template>
-  <div class="config-page">
+  <div class="admin-config">
     <div class="page-header">
-      <div class="header-left">
-        <h2>Memory配置管理</h2>
-      </div>
-      <div class="header-right">
-        <el-button type="primary" @click="handleAddConfig">
-          <el-icon><Plus /></el-icon>
-          添加配置
-        </el-button>
-      </div>
+      <h2>Memory配置管理</h2>
     </div>
 
-    <el-table :data="safeConfigs" style="width: 100%" v-loading="loading">
-      <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column prop="name" label="配置名称" />
-      <el-table-column prop="config_id" label="配置ID" width="150" />
-      <el-table-column prop="provider" label="提供商" width="120">
-        <template #default="scope">
-          <el-tag :type="getProviderTagType(scope.row.provider)">
-            {{ scope.row.provider }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="enabled" label="启用状态" width="80" align="center">
-        <template #default="scope">
-          <el-switch 
-            v-model="scope.row.enabled" 
-            @change="toggleEnable(scope.row)"
-          />
-        </template>
-      </el-table-column>
-      <el-table-column prop="is_default" label="默认配置" width="80" align="center">
-        <template #default="scope">
-          <el-switch 
-            v-model="scope.row.is_default" 
-            @change="toggleDefault(scope.row)"
-          />
-        </template>
-      </el-table-column>
-      <el-table-column prop="created_at" label="创建时间" width="180">
-        <template #default="scope">
-          {{ formatDate(scope.row.created_at) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="180">
-        <template #default="scope">
-          <el-button size="small" @click="editConfig(scope.row)">编辑</el-button>
-          <el-button
-            size="small"
-            type="danger"
-            @click="deleteConfig(scope.row.id)"
-          >
-            删除
-          </el-button>
-        </template>
-      </el-table-column>
-      
-      <!-- 空状态插槽 -->
-      <template #empty>
-        <div class="empty-state">
-          <el-icon size="64" color="#C0C4CC" class="empty-icon">
-            <Box />
-          </el-icon>
-          <div class="empty-text">暂无Memory配置</div>
-          <div class="empty-description">点击上方"添加配置"按钮创建您的第一个Memory配置</div>
-          <el-button type="primary" @click="handleAddConfig" class="empty-action">
+    <el-card class="main-card" shadow="hover">
+      <div class="toolbar">
+        <div class="toolbar-right">
+          <el-button type="primary" @click="handleAddConfig">
             <el-icon><Plus /></el-icon>
             添加配置
           </el-button>
         </div>
-      </template>
-    </el-table>
+      </div>
+
+      <el-table :data="safeConfigs" v-loading="loading" stripe border class="config-table">
+        <el-table-column prop="id" label="ID" width="70" align="center" />
+        <el-table-column prop="name" label="配置名称" min-width="120" />
+        <el-table-column prop="config_id" label="配置ID" width="140" />
+        <el-table-column prop="provider" label="提供商" width="110" align="center">
+          <template #default="scope">
+            <el-tag :type="getProviderTagType(scope.row.provider)">
+              {{ scope.row.provider }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="enabled" label="启用状态" width="90" align="center">
+          <template #default="scope">
+            <el-switch 
+              v-model="scope.row.enabled" 
+              @change="toggleEnable(scope.row)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column prop="is_default" label="默认配置" width="90" align="center">
+          <template #default="scope">
+            <el-switch 
+              v-model="scope.row.is_default" 
+              @change="toggleDefault(scope.row)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="170" align="center">
+          <template #default="scope">
+            <span class="time-text">{{ formatDate(scope.row.created_at) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="180" fixed="right" align="center">
+          <template #default="scope">
+            <el-button size="small" @click="editConfig(scope.row)">编辑</el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              @click="deleteConfig(scope.row.id)"
+            >
+              删除
+            </el-button>
+          </template>
+        </el-table-column>
+        
+        <!-- 空状态插槽 -->
+        <template #empty>
+          <div class="empty-state">
+            <el-icon size="64" color="#C0C4CC" class="empty-icon">
+              <Box />
+            </el-icon>
+            <div class="empty-text">暂无Memory配置</div>
+            <div class="empty-description">点击上方"添加配置"按钮创建您的第一个Memory配置</div>
+            <el-button type="primary" @click="handleAddConfig" class="empty-action">
+              <el-icon><Plus /></el-icon>
+              添加配置
+            </el-button>
+          </div>
+        </template>
+      </el-table>
+    </el-card>
 
     <!-- 添加/编辑配置弹窗 -->
     <el-dialog
@@ -458,46 +462,82 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.config-page {
-  padding: 20px;
+.admin-config {
+  padding: 24px;
 }
 
 .page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
-.header-left h2 {
+.page-header h2 {
   margin: 0;
-  color: #303133;
+  color: #1f2937;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.main-card {
+  border-radius: 16px;
+}
+
+.toolbar {
+  margin-bottom: 24px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 16px;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.config-table {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.time-text {
+  color: #6b7280;
+  font-size: 12px;
 }
 
 .empty-state {
   text-align: center;
-  padding: 60px 20px;
+  padding: 80px 20px;
 }
 
 .empty-icon {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
+  opacity: 0.5;
 }
 
 .empty-text {
-  font-size: 16px;
-  color: #606266;
+  font-size: 18px;
+  color: #374151;
   margin-bottom: 8px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .empty-description {
   font-size: 14px;
-  color: #909399;
-  margin-bottom: 24px;
-  line-height: 1.5;
+  color: #6b7280;
+  margin-bottom: 32px;
 }
 
-.empty-action {
-  margin-top: 8px;
+:deep(.el-table .el-table__header-wrapper th) {
+  background-color: #f9fafb;
+  color: #374151;
+  font-weight: 700;
+  height: 50px;
 }
+
+:deep(.el-table .el-table__row) {
+  height: 60px;
+}
+
 </style>

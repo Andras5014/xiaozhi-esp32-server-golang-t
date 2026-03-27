@@ -58,7 +58,11 @@
             <span class="device-count">{{ allDevicesData.length }}</span>
           </div>
           <div class="action-buttons">
-            <el-button type="success" @click="openInjectMessageDialog" class="add-btn">
+            <el-button
+              type="success"
+              @click="openInjectMessageDialog"
+              class="add-btn"
+            >
               <el-icon><ChatDotRound /></el-icon>
               消息注入
             </el-button>
@@ -68,7 +72,7 @@
             </el-button>
           </div>
         </div>
-        
+
         <div v-if="devices.length === 0" class="empty-container">
           <div class="empty-content">
             <div class="empty-icon">
@@ -82,62 +86,83 @@
             </el-button>
           </div>
         </div>
-        
+
         <div v-else class="devices-grid">
           <div v-for="device in devices" :key="device.id" class="device-item">
             <div class="device-card">
               <div class="device-status">
-                <div class="status-indicator" :class="isDeviceOnline(device.last_active_at) ? 'online' : 'offline'"></div>
-                <span class="status-text">{{ isDeviceOnline(device.last_active_at) ? '在线' : '离线' }}</span>
+                <div
+                  class="status-indicator"
+                  :class="
+                    isDeviceOnline(device.last_active_at) ? 'online' : 'offline'
+                  "
+                ></div>
+                <span class="status-text">{{
+                  isDeviceOnline(device.last_active_at) ? "在线" : "离线"
+                }}</span>
               </div>
-              
+
               <div class="device-info">
                 <div class="device-icon">
                   <el-icon><Monitor /></el-icon>
                 </div>
                 <div class="device-details">
-                  <h3 class="device-name">{{ device.device_name || '未命名设备' }}</h3>
+                  <h3 class="device-name">
+                    {{ device.device_name || "未命名设备" }}
+                  </h3>
                   <p class="device-desc">{{ device.device_code }}</p>
                 </div>
               </div>
-              
+
               <div class="device-features">
                 <div class="feature-item">
                   <el-icon class="feature-icon"><Microphone /></el-icon>
                   <span class="feature-label">语音识别</span>
-                  <el-switch 
-                    v-model="device.vad_status" 
+                  <el-switch
+                    v-model="device.vad_status"
                     @change="toggleVAD(device)"
                     :loading="device.loading"
                     size="small"
                   />
                 </div>
-                
+
                 <div class="feature-item">
                   <el-icon class="feature-icon"><User /></el-icon>
                   <span class="feature-label">智能体</span>
-                  <span class="feature-value">{{ device.agent_name || '未绑定' }}</span>
+                  <span class="feature-value">{{
+                    device.agent_name || "未绑定"
+                  }}</span>
                 </div>
-                
+
                 <div class="feature-item">
                   <el-icon class="feature-icon"><CircleCheck /></el-icon>
                   <span class="feature-label">激活状态</span>
                   <span class="feature-value">
-                    <el-tag :type="device.activated ? 'success' : 'warning'" size="small">
-                      {{ device.activated ? '已激活' : '未激活' }}
+                    <el-tag
+                      :type="device.activated ? 'success' : 'warning'"
+                      size="small"
+                    >
+                      {{ device.activated ? "已激活" : "未激活" }}
                     </el-tag>
                   </span>
                 </div>
-                
+
                 <div class="feature-item">
                   <el-icon class="feature-icon"><Clock /></el-icon>
                   <span class="feature-label">活跃时间</span>
-                  <span class="feature-value">{{ formatTime(device.last_active_at) }}</span>
+                  <span class="feature-value">{{
+                    formatTime(device.last_active_at)
+                  }}</span>
                 </div>
               </div>
-              
+
               <div class="device-actions">
-                <el-button type="primary" size="small" @click="openDeviceControl(device)" class="control-btn">
+                <el-button
+                  type="primary"
+                  size="small"
+                  @click="openDeviceControl(device)"
+                  class="control-btn"
+                >
                   <el-icon><Setting /></el-icon>
                   控制面板
                 </el-button>
@@ -145,11 +170,11 @@
             </div>
           </div>
         </div>
-        
+
         <!-- 查看更多 -->
         <div v-if="allDevicesData.length > 6" class="load-more">
-          <el-button 
-            type="text" 
+          <el-button
+            type="text"
             @click="toggleShowAllDevices"
             class="load-more-btn"
           >
@@ -173,12 +198,16 @@
             <span>AI 智能体</span>
             <span class="device-count">{{ agents.length }}</span>
           </div>
-          <el-button type="primary" @click="$router.push('/agents')" class="add-btn">
+          <el-button
+            type="primary"
+            @click="$router.push('/agents')"
+            class="add-btn"
+          >
             <el-icon><Setting /></el-icon>
             管理智能体
           </el-button>
         </div>
-        
+
         <div v-if="agents.length === 0" class="empty-container">
           <div class="empty-content">
             <div class="empty-icon">
@@ -186,56 +215,77 @@
             </div>
             <h3>还没有智能体</h3>
             <p>创建您的专属AI助手，享受个性化服务</p>
-            <el-button type="primary" size="large" @click="$router.push('/agents')">
+            <el-button
+              type="primary"
+              size="large"
+              @click="$router.push('/agents')"
+            >
               <el-icon><Plus /></el-icon>
               创建智能体
             </el-button>
           </div>
         </div>
-        
+
         <div v-else class="agents-grid">
-          <div v-for="agent in agents.slice(0, 4)" :key="agent.id" class="agent-item">
+          <div
+            v-for="agent in agents.slice(0, 4)"
+            :key="agent.id"
+            class="agent-item"
+          >
             <div class="agent-card" @click="selectAgent(agent)">
               <div class="agent-status">
-                <div class="status-indicator" :class="agent.status === 'active' ? 'online' : 'offline'"></div>
-                <span class="status-text">{{ agent.status === 'active' ? '活跃' : '待机' }}</span>
+                <div
+                  class="status-indicator"
+                  :class="agent.status === 'active' ? 'online' : 'offline'"
+                ></div>
+                <span class="status-text">{{
+                  agent.status === "active" ? "活跃" : "待机"
+                }}</span>
               </div>
-              
+
               <div class="agent-avatar">
                 <div class="avatar-bg" :class="getAgentAvatarClass(agent)">
                   <el-icon><User /></el-icon>
                 </div>
               </div>
-              
+
               <div class="agent-info">
                 <h3 class="agent-name">{{ agent.name }}</h3>
-                <p class="agent-desc">{{ agent.description || '智能AI助手' }}</p>
+                <p class="agent-desc">
+                  {{ agent.description || "智能AI助手" }}
+                </p>
               </div>
-              
+
               <div class="agent-stats">
                 <div class="stat-row">
                   <span class="stat-label">对话次数</span>
-                  <span class="stat-value">{{ agent.conversation_count || 0 }}</span>
+                  <span class="stat-value">{{
+                    agent.conversation_count || 0
+                  }}</span>
                 </div>
                 <div class="stat-row">
                   <span class="stat-label">创建时间</span>
-                  <span class="stat-value">{{ formatDate(agent.created_at) }}</span>
+                  <span class="stat-value">{{
+                    formatDate(agent.created_at)
+                  }}</span>
                 </div>
               </div>
             </div>
           </div>
         </div>
-        
+
         <div v-if="agents.length > 4" class="load-more">
-          <el-button type="text" @click="$router.push('/agents')" class="load-more-btn">
+          <el-button
+            type="text"
+            @click="$router.push('/agents')"
+            class="load-more-btn"
+          >
             查看全部智能体 ({{ agents.length - 4 }}+)
             <el-icon><ArrowRight /></el-icon>
           </el-button>
         </div>
       </div>
     </div>
-
-
 
     <!-- 设备控制弹窗 -->
     <el-dialog
@@ -261,7 +311,7 @@
             </el-button>
           </div>
         </div>
-        
+
         <div class="control-section">
           <h4>语音控制</h4>
           <div class="voice-settings">
@@ -270,7 +320,7 @@
                 <el-slider v-model="currentDevice.volume" :max="100" />
               </el-form-item>
               <el-form-item label="语音识别">
-                <el-switch 
+                <el-switch
                   v-model="currentDevice.vad_status"
                   @change="toggleVAD(currentDevice)"
                 />
@@ -311,21 +361,31 @@
             >
               <div class="device-option">
                 <div class="device-option-header">
-                  <span class="device-name">{{ device.device_name || '未命名设备' }}</span>
-                  <el-tag 
-                    :type="isDeviceOnline(device.last_active_at) ? 'success' : 'danger'" 
+                  <span class="device-name">{{
+                    device.device_name || "未命名设备"
+                  }}</span>
+                  <el-tag
+                    :type="
+                      isDeviceOnline(device.last_active_at)
+                        ? 'success'
+                        : 'danger'
+                    "
                     size="small"
                   >
-                    {{ isDeviceOnline(device.last_active_at) ? '在线' : '离线' }}
+                    {{
+                      isDeviceOnline(device.last_active_at) ? "在线" : "离线"
+                    }}
                   </el-tag>
                 </div>
                 <div class="device-code">{{ device.device_code }}</div>
-                <div class="device-agent">智能体: {{ device.agent_name || '未绑定' }}</div>
+                <div class="device-agent">
+                  智能体: {{ device.agent_name || "未绑定" }}
+                </div>
               </div>
             </el-option>
           </el-select>
         </el-form-item>
-        
+
         <el-form-item label="消息内容" prop="message">
           <el-input
             v-model="injectForm.message"
@@ -336,25 +396,29 @@
             show-word-limit
           />
         </el-form-item>
-        
+
         <el-form-item label="处理方式" prop="skip_llm">
           <el-radio-group v-model="injectForm.skip_llm">
             <el-radio :label="false">
               <div class="radio-option">
                 <div class="radio-title">通过LLM处理</div>
-                <div class="radio-desc">消息会经过AI智能体处理，生成智能回复</div>
+                <div class="radio-desc">
+                  消息会经过AI智能体处理，生成智能回复
+                </div>
               </div>
             </el-radio>
             <el-radio :label="true">
               <div class="radio-option">
                 <div class="radio-title">直接播放</div>
-                <div class="radio-desc">消息直接转换为语音播放，不经过AI处理</div>
+                <div class="radio-desc">
+                  消息直接转换为语音播放，不经过AI处理
+                </div>
               </div>
             </el-radio>
           </el-radio-group>
         </el-form-item>
       </el-form>
-      
+
       <template #footer>
         <div class="dialog-footer">
           <el-button @click="handleCloseInjectMessage">取消</el-button>
@@ -363,7 +427,7 @@
             :loading="injectingMessage"
             @click="handleInjectMessage"
           >
-            {{ injectingMessage ? '注入中...' : '注入消息' }}
+            {{ injectingMessage ? "注入中..." : "注入消息" }}
           </el-button>
         </div>
       </template>
@@ -390,7 +454,7 @@
             show-word-limit
           />
         </el-form-item>
-        
+
         <el-form-item label="关联智能体" prop="agent_id">
           <el-select
             v-model="deviceForm.agent_id"
@@ -405,13 +469,15 @@
             >
               <div class="agent-option">
                 <span class="agent-name">{{ agent.name }}</span>
-                <span class="agent-desc">{{ agent.description || '智能AI助手' }}</span>
+                <span class="agent-desc">{{
+                  agent.description || "智能AI助手"
+                }}</span>
               </div>
             </el-option>
           </el-select>
         </el-form-item>
       </el-form>
-      
+
       <template #footer>
         <div class="dialog-footer">
           <el-button @click="handleCloseAddDevice">取消</el-button>
@@ -420,7 +486,7 @@
             :loading="addingDevice"
             @click="handleAddDevice"
           >
-            {{ addingDevice ? '添加中...' : '添加设备' }}
+            {{ addingDevice ? "添加中..." : "添加设备" }}
           </el-button>
         </div>
       </template>
@@ -429,8 +495,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, onMounted } from "vue";
+import { ElMessage } from "element-plus";
 import {
   Monitor,
   Connection,
@@ -448,281 +514,297 @@ import {
   Cpu,
   User,
   Clock,
-  ChatDotRound
-} from '@element-plus/icons-vue'
-import api from '../../utils/api'
+  ChatDotRound,
+} from "@element-plus/icons-vue";
+import api from "../../utils/api";
 
-const devices = ref([])
-const agents = ref([])
-const allDevicesData = ref([])
-const showDeviceControl = ref(false)
-const currentDevice = ref(null)
-const showAllDevices = ref(false)
+const devices = ref([]);
+const agents = ref([]);
+const allDevicesData = ref([]);
+const showDeviceControl = ref(false);
+const currentDevice = ref(null);
+const showAllDevices = ref(false);
 
 // 加载设备列表
 const loadDevices = async () => {
   try {
-    const response = await api.get('/user/devices')
-    const allDevices = response.data.data || []
+    const response = await api.get("/user/devices");
+    const allDevices = response.data.data || [];
     // 保存所有设备数据
-    allDevicesData.value = allDevices.map(device => ({
+    allDevicesData.value = allDevices.map((device) => ({
       ...device,
       loading: false,
-      volume: device.volume || 80
-    }))
+      volume: device.volume || 80,
+    }));
     // 限制显示最多6个设备
-    devices.value = showAllDevices.value ? allDevicesData.value : allDevicesData.value.slice(0, 6)
+    devices.value = showAllDevices.value
+      ? allDevicesData.value
+      : allDevicesData.value.slice(0, 6);
     // 更新统计数据
-    updateStats()
+    updateStats();
   } catch (error) {
-    console.error('加载设备失败:', error)
-    ElMessage.error('加载设备失败')
-    devices.value = []
-    allDevicesData.value = []
+    console.error("加载设备失败:", error);
+    ElMessage.error("加载设备失败");
+    devices.value = [];
+    allDevicesData.value = [];
   }
-}
+};
 
 // 加载智能体列表
 const loadAgents = async () => {
   try {
-    const response = await api.get('/user/agents')
-    agents.value = response.data.data || []
+    const response = await api.get("/user/agents");
+    agents.value = response.data.data || [];
     // 更新统计数据
-    updateStats()
+    updateStats();
   } catch (error) {
-    console.error('加载智能体失败:', error)
-    ElMessage.error('加载智能体失败')
-    agents.value = []
+    console.error("加载智能体失败:", error);
+    ElMessage.error("加载智能体失败");
+    agents.value = [];
   }
-}
+};
 
 // 切换语音识别状态
 const toggleVAD = async (device) => {
-  device.loading = true
+  device.loading = true;
   try {
     // 模拟API调用
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    device.vad_status = !device.vad_status
-    ElMessage.success(`${device.vad_status ? '启用' : '禁用'}语音识别成功`)
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    device.vad_status = !device.vad_status;
+    ElMessage.success(`${device.vad_status ? "启用" : "禁用"}语音识别成功`);
   } catch (error) {
-    console.error('切换语音识别失败:', error)
-    ElMessage.error('操作失败')
+    console.error("切换语音识别失败:", error);
+    ElMessage.error("操作失败");
   } finally {
-    device.loading = false
+    device.loading = false;
   }
-}
+};
 
 // 打开设备控制面板
 const openDeviceControl = (device) => {
-  currentDevice.value = device
-  showDeviceControl.value = true
-}
+  currentDevice.value = device;
+  showDeviceControl.value = true;
+};
 
 // 发送设备命令
 const sendCommand = async (command) => {
   try {
     // 模拟API调用
-    await new Promise(resolve => setTimeout(resolve, 500))
-    ElMessage.success(`命令 ${command} 发送成功`)
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    ElMessage.success(`命令 ${command} 发送成功`);
   } catch (error) {
-    console.error('发送命令失败:', error)
-    ElMessage.error('发送命令失败')
+    console.error("发送命令失败:", error);
+    ElMessage.error("发送命令失败");
   }
-}
+};
 
 // 选择智能体
 const selectAgent = (agent) => {
-  ElMessage.info(`选择了智能体: ${agent.name}`)
+  ElMessage.info(`选择了智能体: ${agent.name}`);
   // 可以跳转到智能体详情页或执行其他操作
-}
+};
 
 // 添加设备相关状态
-const showAddDeviceDialog = ref(false)
-const addingDevice = ref(false)
-const deviceFormRef = ref()
+const showAddDeviceDialog = ref(false);
+const addingDevice = ref(false);
+const deviceFormRef = ref();
 
 // 消息注入相关状态
-const showInjectMessageDialog = ref(false)
-const injectingMessage = ref(false)
-const injectFormRef = ref()
+const showInjectMessageDialog = ref(false);
+const injectingMessage = ref(false);
+const injectFormRef = ref();
 
 const deviceForm = reactive({
-  device_name: '',
-  agent_id: ''
-})
+  device_name: "",
+  agent_id: "",
+});
 
 const deviceRules = {
   device_name: [
-    { required: true, message: '请输入设备名称', trigger: 'blur' },
-    { min: 2, max: 50, message: '设备名称长度在2-50个字符之间', trigger: 'blur' }
+    { required: true, message: "请输入设备名称", trigger: "blur" },
+    {
+      min: 2,
+      max: 50,
+      message: "设备名称长度在2-50个字符之间",
+      trigger: "blur",
+    },
   ],
   agent_id: [
-    { required: true, message: '请选择关联智能体', trigger: 'change' }
-  ]
-}
+    { required: true, message: "请选择关联智能体", trigger: "change" },
+  ],
+};
 
 const injectForm = reactive({
-  device_id: '',
-  message: '',
-  skip_llm: false
-})
+  device_id: "",
+  message: "",
+  skip_llm: false,
+});
 
 const injectRules = {
-  device_id: [
-    { required: true, message: '请选择设备', trigger: 'change' }
-  ],
+  device_id: [{ required: true, message: "请选择设备", trigger: "change" }],
   message: [
-    { required: true, message: '请输入消息内容', trigger: 'blur' },
-    { min: 1, max: 500, message: '消息长度在1-500个字符之间', trigger: 'blur' }
-  ]
-}
+    { required: true, message: "请输入消息内容", trigger: "blur" },
+    { min: 1, max: 500, message: "消息长度在1-500个字符之间", trigger: "blur" },
+  ],
+};
 
 // 打开添加设备弹窗
 const addDevice = () => {
   if (agents.value.length === 0) {
-    ElMessage.warning('请先创建智能体，然后再添加设备')
-    return
+    ElMessage.warning("请先创建智能体，然后再添加设备");
+    return;
   }
-  showAddDeviceDialog.value = true
-}
+  showAddDeviceDialog.value = true;
+};
 
 // 处理添加设备
 const handleAddDevice = async () => {
-  if (!deviceFormRef.value) return
-  
+  if (!deviceFormRef.value) return;
+
   try {
-    await deviceFormRef.value.validate()
-    addingDevice.value = true
-    
-    const response = await api.post('/user/devices', {
+    await deviceFormRef.value.validate();
+    addingDevice.value = true;
+
+    const response = await api.post("/user/devices", {
       device_name: deviceForm.device_name,
-      agent_id: parseInt(deviceForm.agent_id)
-    })
-    
+      agent_id: parseInt(deviceForm.agent_id),
+    });
+
     if (response.data.success) {
-      ElMessage.success('设备添加成功')
-      handleCloseAddDevice()
-      await loadDevices()
+      ElMessage.success("设备添加成功");
+      handleCloseAddDevice();
+      await loadDevices();
     }
   } catch (error) {
-    console.error('添加设备失败:', error)
-    ElMessage.error(error.response?.data?.error || '添加设备失败')
+    console.error("添加设备失败:", error);
+    ElMessage.error(error.response?.data?.error || "添加设备失败");
   } finally {
-    addingDevice.value = false
+    addingDevice.value = false;
   }
-}
+};
 
 // 关闭添加设备弹窗
 const handleCloseAddDevice = () => {
-  showAddDeviceDialog.value = false
+  showAddDeviceDialog.value = false;
   if (deviceFormRef.value) {
-    deviceFormRef.value.resetFields()
+    deviceFormRef.value.resetFields();
   }
-  Object.assign(deviceForm, { device_name: '', agent_id: '' })
-}
+  Object.assign(deviceForm, { device_name: "", agent_id: "" });
+};
 
 // 打开消息注入弹窗
 const openInjectMessageDialog = () => {
   if (allDevicesData.value.length === 0) {
-    ElMessage.warning('请先添加设备，然后再进行消息注入')
-    return
+    ElMessage.warning("请先添加设备，然后再进行消息注入");
+    return;
   }
-  
-  showInjectMessageDialog.value = true
-}
+
+  showInjectMessageDialog.value = true;
+};
 
 // 处理消息注入
 const handleInjectMessage = async () => {
-  if (!injectFormRef.value) return
-  
+  if (!injectFormRef.value) return;
+
   try {
-    await injectFormRef.value.validate()
-    injectingMessage.value = true
-    
-    const response = await api.post('/user/devices/inject-message', {
+    await injectFormRef.value.validate();
+    injectingMessage.value = true;
+
+    const response = await api.post("/user/devices/inject-message", {
       device_id: injectForm.device_id,
       message: injectForm.message,
-      skip_llm: injectForm.skip_llm
-    })
-    
+      skip_llm: injectForm.skip_llm,
+    });
+
     if (response.data.success) {
-      ElMessage.success('消息注入成功')
-      handleCloseInjectMessage()
+      ElMessage.success("消息注入成功");
+      handleCloseInjectMessage();
     }
   } catch (error) {
-    console.error('消息注入失败:', error)
-    ElMessage.error(error.response?.data?.error || '消息注入失败')
+    console.error("消息注入失败:", error);
+    ElMessage.error(error.response?.data?.error || "消息注入失败");
   } finally {
-    injectingMessage.value = false
+    injectingMessage.value = false;
   }
-}
+};
 
 // 关闭消息注入弹窗
 const handleCloseInjectMessage = () => {
-  showInjectMessageDialog.value = false
+  showInjectMessageDialog.value = false;
   if (injectFormRef.value) {
-    injectFormRef.value.resetFields()
+    injectFormRef.value.resetFields();
   }
-  Object.assign(injectForm, { device_id: '', message: '', skip_llm: false })
-}
+  Object.assign(injectForm, { device_id: "", message: "", skip_llm: false });
+};
 
 // 切换显示所有设备
 const toggleShowAllDevices = () => {
-  showAllDevices.value = !showAllDevices.value
-  devices.value = showAllDevices.value ? allDevicesData.value : allDevicesData.value.slice(0, 6)
-}
+  showAllDevices.value = !showAllDevices.value;
+  devices.value = showAllDevices.value
+    ? allDevicesData.value
+    : allDevicesData.value.slice(0, 6);
+};
 
 // 计算属性
-const onlineDevicesCount = ref(0)
-const activeAgentsCount = ref(0)
+const onlineDevicesCount = ref(0);
+const activeAgentsCount = ref(0);
 
 // 判断设备是否在线（基于最后活跃时间）
 const isDeviceOnline = (lastActiveAt) => {
-  if (!lastActiveAt) return false
-  const now = new Date()
-  const lastActive = new Date(lastActiveAt)
+  if (!lastActiveAt) return false;
+  const now = new Date();
+  const lastActive = new Date(lastActiveAt);
   // 5分钟内有活动认为在线
-  return (now - lastActive) < 5 * 60 * 1000
-}
+  return now - lastActive < 5 * 60 * 1000;
+};
 
 // 更新统计数据
 const updateStats = () => {
-  onlineDevicesCount.value = allDevicesData.value.filter(device => isDeviceOnline(device.last_active_at)).length
-  activeAgentsCount.value = agents.value.filter(agent => agent.status === 'active').length
-}
+  onlineDevicesCount.value = allDevicesData.value.filter((device) =>
+    isDeviceOnline(device.last_active_at),
+  ).length;
+  activeAgentsCount.value = agents.value.filter(
+    (agent) => agent.status === "active",
+  ).length;
+};
 
 // 获取智能体头像类
 const getAgentAvatarClass = (agent) => {
-  const classes = ['avatar-blue', 'avatar-green', 'avatar-purple', 'avatar-orange']
-  return classes[agent.id % classes.length] || 'avatar-blue'
-}
+  const classes = [
+    "avatar-blue",
+    "avatar-green",
+    "avatar-purple",
+    "avatar-orange",
+  ];
+  return classes[agent.id % classes.length] || "avatar-blue";
+};
 
 // 格式化时间
 const formatTime = (date) => {
-  if (!date) return '未知'
-  const now = new Date()
-  const diff = now - new Date(date)
-  const minutes = Math.floor(diff / (1000 * 60))
-  const hours = Math.floor(diff / (1000 * 60 * 60))
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-  
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes}分钟前`
-  if (hours < 24) return `${hours}小时前`
-  if (days < 30) return `${days}天前`
-  return `${Math.floor(days / 30)}个月前`
-}
+  if (!date) return "未知";
+  const now = new Date();
+  const diff = now - new Date(date);
+  const minutes = Math.floor(diff / (1000 * 60));
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes}分钟前`;
+  if (hours < 24) return `${hours}小时前`;
+  if (days < 30) return `${days}天前`;
+  return `${Math.floor(days / 30)}个月前`;
+};
 
 // 格式化日期
 const formatDate = (dateString) => {
-  if (!dateString) return '--'
-  return new Date(dateString).toLocaleDateString('zh-CN')
-}
+  if (!dateString) return "--";
+  return new Date(dateString).toLocaleDateString("zh-CN");
+};
 
 onMounted(() => {
-  loadDevices()
-  loadAgents()
-})
+  loadDevices();
+  loadAgents();
+});
 </script>
 
 <style scoped>
@@ -1237,12 +1319,12 @@ onMounted(() => {
     align-items: flex-start;
     gap: 16px;
   }
-  
+
   .quick-stats {
     flex-wrap: wrap;
     gap: 12px;
   }
-  
+
   .devices-grid {
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   }
@@ -1257,11 +1339,11 @@ onMounted(() => {
   .page-header {
     padding: 16px 0;
   }
-  
+
   .header-content {
     padding: 0 16px;
   }
-  
+
   .welcome-title {
     font-size: 20px;
   }
@@ -1288,17 +1370,17 @@ onMounted(() => {
     white-space: nowrap;
     font-size: 11px;
   }
-  
+
   .main-content {
     margin: 16px auto 24px;
     padding: 0 16px;
   }
-  
+
   .content-section {
     padding: 16px;
     margin-bottom: 16px;
   }
-  
+
   .section-header {
     flex-direction: column;
     align-items: flex-start;
@@ -1339,21 +1421,6 @@ onMounted(() => {
     justify-content: flex-end;
     flex-wrap: wrap;
     gap: 8px;
-  }
-
-  :deep(.el-dialog) {
-    width: calc(100vw - 24px) !important;
-    margin-top: 8vh !important;
-  }
-
-  :deep(.el-dialog__body) {
-    max-height: 65vh;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  :deep(.el-dialog__header) {
-    margin-right: 0;
   }
 
   :deep(.el-form-item__label) {
@@ -1519,12 +1586,12 @@ onMounted(() => {
   .radio-desc {
     white-space: normal;
   }
-  
+
   .devices-grid {
     grid-template-columns: 1fr;
     gap: 10px;
   }
-  
+
   .agents-grid {
     grid-template-columns: 1fr;
   }

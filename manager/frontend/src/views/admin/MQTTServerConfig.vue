@@ -42,18 +42,28 @@
               <span class="card-title">基础配置</span>
             </div>
           </template>
-          
+
           <div class="form-grid basic-form-grid">
             <el-form-item label="启用状态" prop="enable" class="form-item">
               <el-switch v-model="form.enable" />
             </el-form-item>
-            
+
             <el-form-item label="监听主机" prop="listen_host" class="form-item">
-              <el-input v-model="form.listen_host" placeholder="请输入监听主机地址" style="max-width: 300px" />
+              <el-input
+                v-model="form.listen_host"
+                placeholder="请输入监听主机地址"
+                style="max-width: 300px"
+              />
             </el-form-item>
-            
+
             <el-form-item label="监听端口" prop="listen_port" class="form-item">
-              <el-input-number v-model="form.listen_port" :min="1" :max="65535" placeholder="请输入监听端口号" style="max-width: 200px" />
+              <el-input-number
+                v-model="form.listen_port"
+                :min="1"
+                :max="65535"
+                placeholder="请输入监听端口号"
+                style="max-width: 200px"
+              />
             </el-form-item>
           </div>
         </el-card>
@@ -68,40 +78,69 @@
               <span class="card-title">认证配置</span>
             </div>
           </template>
-          
+
           <!-- 提示信息 -->
           <div class="config-tip">
             <el-icon class="tip-icon">
               <InfoFilled />
             </el-icon>
-            <span class="tip-text">主程序连接mqtt server所使用的用户名密码</span>
+            <span class="tip-text"
+              >主程序连接mqtt server所使用的用户名密码</span
+            >
           </div>
-          
+
           <div class="form-grid auth-form-grid">
             <el-form-item label="启用认证" prop="enable_auth" class="form-item">
               <div class="form-item-with-help">
                 <el-switch v-model="form.enable_auth" />
-                <el-tooltip content="将校验mqtt客户连接用户名密码" placement="top">
+                <el-tooltip
+                  content="将校验mqtt客户连接用户名密码"
+                  placement="top"
+                >
                   <el-icon class="help-icon"><QuestionFilled /></el-icon>
                 </el-tooltip>
               </div>
             </el-form-item>
-            
+
             <div class="form-row">
-              <el-form-item label="管理员用户" prop="username" class="form-item">
-                <el-input v-model="form.username" placeholder="请输入管理员用户名" style="max-width: 250px" />
+              <el-form-item
+                label="管理员用户"
+                prop="username"
+                class="form-item"
+              >
+                <el-input
+                  v-model="form.username"
+                  placeholder="请输入管理员用户名"
+                  style="max-width: 250px"
+                />
               </el-form-item>
-              
-              <el-form-item label="管理员密码" prop="password" class="form-item">
-                <el-input v-model="form.password" type="password" placeholder="请输入管理员密码" show-password style="max-width: 250px" />
+
+              <el-form-item
+                label="管理员密码"
+                prop="password"
+                class="form-item"
+              >
+                <el-input
+                  v-model="form.password"
+                  type="password"
+                  placeholder="请输入管理员密码"
+                  show-password
+                  style="max-width: 250px"
+                />
               </el-form-item>
             </div>
-            
-            <el-form-item label="签名密钥" prop="signature_key" class="form-item">
-              <el-input v-model="form.signature_key" placeholder="请输入签名密钥" style="max-width: 400px" />
-              <div class="form-item-hint">
-                与ota配置页面签名密钥对应
-              </div>
+
+            <el-form-item
+              label="签名密钥"
+              prop="signature_key"
+              class="form-item"
+            >
+              <el-input
+                v-model="form.signature_key"
+                placeholder="请输入签名密钥"
+                style="max-width: 400px"
+              />
+              <div class="form-item-hint">与ota配置页面签名密钥对应</div>
             </el-form-item>
           </div>
         </el-card>
@@ -114,36 +153,73 @@
                 <Lock />
               </el-icon>
               <span class="card-title">TLS配置</span>
-              <el-tooltip content="mqtt server启用mqtts进行连接" placement="top">
+              <el-tooltip
+                content="mqtt server启用mqtts进行连接"
+                placement="top"
+              >
                 <el-icon class="help-icon"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
           </template>
-          
+
           <div class="form-grid tls-form-grid">
             <div class="form-row">
               <el-form-item label="启用TLS" prop="tls.enable" class="form-item">
                 <el-switch v-model="form.tls.enable" />
               </el-form-item>
-              
-              <el-form-item label="TLS端口" prop="tls.port" v-if="form.tls.enable" class="form-item">
-                <el-input-number v-model="form.tls.port" :min="1" :max="65535" placeholder="请输入TLS端口号" style="max-width: 200px" />
+
+              <el-form-item
+                label="TLS端口"
+                prop="tls.port"
+                v-if="form.tls.enable"
+                class="form-item"
+              >
+                <el-input-number
+                  v-model="form.tls.port"
+                  :min="1"
+                  :max="65535"
+                  placeholder="请输入TLS端口号"
+                  style="max-width: 200px"
+                />
               </el-form-item>
             </div>
-            
-            <el-form-item label="证书文件" prop="tls.pem" v-if="form.tls.enable" class="form-item">
-              <el-input v-model="form.tls.pem" placeholder="请输入证书文件路径" style="max-width: 400px" />
+
+            <el-form-item
+              label="证书文件"
+              prop="tls.pem"
+              v-if="form.tls.enable"
+              class="form-item"
+            >
+              <el-input
+                v-model="form.tls.pem"
+                placeholder="请输入证书文件路径"
+                style="max-width: 400px"
+              />
             </el-form-item>
-            
-            <el-form-item label="密钥文件" prop="tls.key" v-if="form.tls.enable" class="form-item">
-              <el-input v-model="form.tls.key" placeholder="请输入密钥文件路径" style="max-width: 400px" />
+
+            <el-form-item
+              label="密钥文件"
+              prop="tls.key"
+              v-if="form.tls.enable"
+              class="form-item"
+            >
+              <el-input
+                v-model="form.tls.key"
+                placeholder="请输入密钥文件路径"
+                style="max-width: 400px"
+              />
             </el-form-item>
           </div>
         </el-card>
 
         <!-- 操作按钮 -->
         <div class="action-section">
-          <el-button type="primary" @click="handleSave" :loading="saving" class="save-button">
+          <el-button
+            type="primary"
+            @click="handleSave"
+            size="large"
+            :loading="saving"
+          >
             保存配置
           </el-button>
         </div>
@@ -153,134 +229,156 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Monitor, Setting, Platform, User, Lock, InfoFilled, QuestionFilled } from '@element-plus/icons-vue'
-import api from '../../utils/api'
+import { ref, reactive, onMounted, watch } from "vue";
+import { ElMessage } from "element-plus";
+import {
+  Monitor,
+  Setting,
+  Platform,
+  User,
+  Lock,
+  InfoFilled,
+  QuestionFilled,
+} from "@element-plus/icons-vue";
+import api from "../../utils/api";
 
-const loading = ref(false)
-const saving = ref(false)
-const configId = ref(null)
-const formRef = ref(null)
+const loading = ref(false);
+const saving = ref(false);
+const configId = ref(null);
+const formRef = ref(null);
 
 const form = reactive({
   enable: true,
-  listen_host: '0.0.0.0',
+  listen_host: "0.0.0.0",
   listen_port: 1883,
-  username: '',
-  password: '',
-  signature_key: 'xiaozhi_ota_signature_key',
+  username: "",
+  password: "",
+  signature_key: "xiaozhi_ota_signature_key",
   enable_auth: false,
   tls: {
     enable: false,
     port: 8883,
-    pem: '',
-    key: ''
-  }
-})
-
-
+    pem: "",
+    key: "",
+  },
+});
 
 const rules = {
-  listen_host: [{ required: true, message: '请输入监听主机地址', trigger: 'blur' }],
-  listen_port: [
-    { required: true, message: '请输入监听端口号', trigger: 'blur' },
-    { type: 'number', min: 1, max: 65535, message: '端口号必须在1-65535之间', trigger: 'blur' }
+  listen_host: [
+    { required: true, message: "请输入监听主机地址", trigger: "blur" },
   ],
-  username: [{ required: true, message: '请输入管理员用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入管理员密码', trigger: 'blur' }],
-  signature_key: [{ required: true, message: '请输入签名密钥', trigger: 'blur' }],
-  'tls.port': [
+  listen_port: [
+    { required: true, message: "请输入监听端口号", trigger: "blur" },
+    {
+      type: "number",
+      min: 1,
+      max: 65535,
+      message: "端口号必须在1-65535之间",
+      trigger: "blur",
+    },
+  ],
+  username: [
+    { required: true, message: "请输入管理员用户名", trigger: "blur" },
+  ],
+  password: [{ required: true, message: "请输入管理员密码", trigger: "blur" }],
+  signature_key: [
+    { required: true, message: "请输入签名密钥", trigger: "blur" },
+  ],
+  "tls.port": [
     {
       validator: (rule, value, callback) => {
         if (form.tls.enable && (!value || value < 1 || value > 65535)) {
-          callback(new Error('启用TLS时端口号必须在1-65535之间'))
+          callback(new Error("启用TLS时端口号必须在1-65535之间"));
         } else {
-          callback()
+          callback();
         }
       },
-      trigger: 'blur'
-    }
+      trigger: "blur",
+    },
   ],
-  'tls.pem': [
+  "tls.pem": [
     {
       validator: (rule, value, callback) => {
         if (form.tls.enable && !value) {
-          callback(new Error('启用TLS时证书文件路径不能为空'))
+          callback(new Error("启用TLS时证书文件路径不能为空"));
         } else {
-          callback()
+          callback();
         }
       },
-      trigger: 'blur'
-    }
+      trigger: "blur",
+    },
   ],
-  'tls.key': [
+  "tls.key": [
     {
       validator: (rule, value, callback) => {
         if (form.tls.enable && !value) {
-          callback(new Error('启用TLS时密钥文件路径不能为空'))
+          callback(new Error("启用TLS时密钥文件路径不能为空"));
         } else {
-          callback()
+          callback();
         }
       },
-      trigger: 'blur'
-    }
-  ]
-}
+      trigger: "blur",
+    },
+  ],
+};
 
 const loadConfig = async () => {
   try {
-    loading.value = true
-    const response = await api.get('/admin/mqtt-server-configs')
-    const configs = response.data.data || []
+    loading.value = true;
+    const response = await api.get("/admin/mqtt-server-configs");
+    const configs = response.data.data || [];
     if (configs.length > 0) {
-      const config = configs[0]
-      configId.value = config.id
-      
+      const config = configs[0];
+      configId.value = config.id;
+
       // 解析JSON配置数据
       try {
-        const configData = JSON.parse(config.json_data || '{}')
-        form.enable = configData.enable !== undefined ? configData.enable : true
-        form.listen_host = configData.listen_host || '0.0.0.0'
-        form.listen_port = Number(configData.listen_port) || 1883 // 确保端口是数字类型
-        form.username = configData.username || ''
-        form.password = configData.password || ''
-        form.signature_key = configData.signature_key || 'xiaozhi_ota_signature_key'
-        form.enable_auth = configData.enable_auth !== undefined ? configData.enable_auth : false
-        
+        const configData = JSON.parse(config.json_data || "{}");
+        form.enable =
+          configData.enable !== undefined ? configData.enable : true;
+        form.listen_host = configData.listen_host || "0.0.0.0";
+        form.listen_port = Number(configData.listen_port) || 1883; // 确保端口是数字类型
+        form.username = configData.username || "";
+        form.password = configData.password || "";
+        form.signature_key =
+          configData.signature_key || "xiaozhi_ota_signature_key";
+        form.enable_auth =
+          configData.enable_auth !== undefined ? configData.enable_auth : false;
+
         if (configData.tls) {
-          form.tls.enable = configData.tls.enable !== undefined ? configData.tls.enable : false
-          form.tls.port = Number(configData.tls.port) || 8883 // 确保TLS端口是数字类型
-          form.tls.pem = configData.tls.pem || ''
-          form.tls.key = configData.tls.key || ''
+          form.tls.enable =
+            configData.tls.enable !== undefined ? configData.tls.enable : false;
+          form.tls.port = Number(configData.tls.port) || 8883; // 确保TLS端口是数字类型
+          form.tls.pem = configData.tls.pem || "";
+          form.tls.key = configData.tls.key || "";
         }
       } catch (error) {
-        console.error('解析配置JSON失败:', error)
-        ElMessage.warning('配置格式错误，已重置为默认值')
+        console.error("解析配置JSON失败:", error);
+        ElMessage.warning("配置格式错误，已重置为默认值");
       }
     }
   } catch (error) {
-    ElMessage.error('加载配置失败：' + error.message)
+    ElMessage.error("加载配置失败：" + error.message);
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-}
+};
 
 const handleSave = async () => {
-  if (!formRef.value) return
-  
+  if (!formRef.value) return;
+
   try {
-    await formRef.value.validate()
-    saving.value = true
-    
+    await formRef.value.validate();
+    saving.value = true;
+
     // 如果TLS被禁用，清空相关字段
     if (!form.tls.enable) {
-      form.tls.pem = ''
-      form.tls.key = ''
+      form.tls.pem = "";
+      form.tls.key = "";
     }
-    
+
     // 移除认证禁用时清空用户名密码的逻辑，因为管理员用户名密码与启用认证无关
-    
+
     const configData = {
       enable: form.enable,
       listen_host: form.listen_host,
@@ -293,66 +391,78 @@ const handleSave = async () => {
         enable: form.tls.enable,
         port: Number(form.tls.port), // 确保TLS端口是数字类型
         pem: form.tls.pem,
-        key: form.tls.key
-      }
-    }
-    
-    console.log('保存的配置数据:', configData) // 调试信息
-    console.log('监听端口值:', form.listen_port, '类型:', typeof form.listen_port) // 调试端口信息
-    
+        key: form.tls.key,
+      },
+    };
+
+    console.log("保存的配置数据:", configData); // 调试信息
+    console.log(
+      "监听端口值:",
+      form.listen_port,
+      "类型:",
+      typeof form.listen_port,
+    ); // 调试端口信息
+
     const payload = {
-      name: 'MQTT Server配置',
-      config_id: 'mqtt_server_mqtt_server_config',
-      provider: 'mqtt_server',
+      name: "MQTT Server配置",
+      config_id: "mqtt_server_mqtt_server_config",
+      provider: "mqtt_server",
       json_data: JSON.stringify(configData),
       enabled: true,
-      is_default: true
-    }
-    
-    console.log('发送的payload:', payload) // 调试信息
-    
+      is_default: true,
+    };
+
+    console.log("发送的payload:", payload); // 调试信息
+
     if (configId.value) {
-      const response = await api.put(`/admin/mqtt-server-configs/${configId.value}`, payload)
-      console.log('更新响应:', response) // 调试信息
-      ElMessage.success('更新配置成功')
+      const response = await api.put(
+        `/admin/mqtt-server-configs/${configId.value}`,
+        payload,
+      );
+      console.log("更新响应:", response); // 调试信息
+      ElMessage.success("更新配置成功");
     } else {
-      const response = await api.post('/admin/mqtt-server-configs', payload)
-      console.log('创建响应:', response) // 调试信息
-      configId.value = response.data.data.id
-      ElMessage.success('创建配置成功')
+      const response = await api.post("/admin/mqtt-server-configs", payload);
+      console.log("创建响应:", response); // 调试信息
+      configId.value = response.data.data.id;
+      ElMessage.success("创建配置成功");
     }
   } catch (error) {
-    console.error('保存错误:', error) // 调试信息
+    console.error("保存错误:", error); // 调试信息
     if (error.message) {
-      ElMessage.error('保存失败：' + error.message)
+      ElMessage.error("保存失败：" + error.message);
     }
   } finally {
-    saving.value = false
+    saving.value = false;
   }
-}
-
-
+};
 
 // 监听TLS开关状态变化，清空相关字段
-watch(() => form.tls.enable, (enabled) => {
-  if (!enabled) {
-    // 当TLS禁用时，清空证书和密钥字段并重置验证
-    form.tls.pem = ''
-    form.tls.key = ''
-    formRef.value?.clearValidate(['tls.pem', 'tls.key'])
-  }
-})
+watch(
+  () => form.tls.enable,
+  (enabled) => {
+    if (!enabled) {
+      // 当TLS禁用时，清空证书和密钥字段并重置验证
+      form.tls.pem = "";
+      form.tls.key = "";
+      formRef.value?.clearValidate(["tls.pem", "tls.key"]);
+    }
+  },
+);
 
 // 监听监听端口变化，用于调试
-watch(() => form.listen_port, (newValue) => {
-  console.log('监听端口变化:', newValue, '类型:', typeof newValue)
-})
+watch(
+  () => form.listen_port,
+  (newValue) => {
+    console.log("监听端口变化:", newValue, "类型:", typeof newValue);
+  },
+);
 
 // 移除认证开关状态监听，因为管理员用户名密码与启用认证无关
 
 onMounted(() => {
-  loadConfig()
-})
+  loadConfig();
+});
 </script>
 
 <style scoped>
@@ -418,14 +528,18 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.95);
   border: 1px solid #e5e7eb;
   border-radius: 12px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
   transition: all 0.3s ease;
   overflow: hidden;
 }
 
 .config-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 10px 25px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  box-shadow:
+    0 10px 25px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
 .basic-config {
@@ -566,34 +680,11 @@ onMounted(() => {
   font-size: 14px;
 }
 
-:deep(.el-input__wrapper) {
-  border-radius: 8px;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-  transition: all 0.2s ease;
-}
-
-:deep(.el-input__wrapper:hover) {
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-}
-
-:deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.1);
-}
-
-:deep(.el-select .el-input__wrapper) {
-  border-radius: 8px;
-}
-
-:deep(.el-input-number .el-input__wrapper) {
-  border-radius: 8px;
-}
-
 :deep(.el-switch) {
   --el-switch-on-color: #409eff;
 }
 
 :deep(.el-card__header) {
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
   border-bottom: 1px solid #e2e8f0;
   padding: 20px 24px;
 }
@@ -616,13 +707,17 @@ onMounted(() => {
   border-radius: 8px;
   background: linear-gradient(135deg, #409eff 0%, #67c23a 100%);
   border: none;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
   transition: all 0.3s ease;
 }
 
 .save-button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 10px 25px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  box-shadow:
+    0 10px 25px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
 /* 响应式设计 */
@@ -630,7 +725,7 @@ onMounted(() => {
   .mqtt-server-config {
     padding: 16px;
   }
-  
+
   .page-title {
     font-size: 20px;
   }
