@@ -24,6 +24,13 @@ type ASR struct {
 	config Config
 }
 
+func classifyXunfeiRetryReason(code int, message string) string {
+	if code == 10008 || strings.Contains(strings.ToLower(message), "service instance invalid") {
+		return asrtypes.RetryReasonXunfeiServiceInstanceInvalid
+	}
+	return asrtypes.RetryReasonNone
+}
+
 func New(cfg Config) (*ASR, error) {
 	finalCfg := defaultConfig()
 	if cfg.AppID != "" {
@@ -158,18 +165,22 @@ func (a *ASR) handleStreaming(ctx context.Context, conn *websocket.Conn, audioSt
 				resultChan <- asrtypes.StreamingResult{Text: finalText, IsFinal: true, EmptyReason: emptyReason}
 				return
 			}
-			resultChan <- asrtypes.StreamingResult{Error: fmt.Errorf("xunfei read message failed: %w", err)}
+			resultChan <- asrtypes.StreamingResult{Error: fmt.Errorf("xunfei read message failed: %w", err), IsFinal: true}
 			return
 		}
 		recvCount++
 
 		var rsp response
 		if err := json.Unmarshal(msg, &rsp); err != nil {
-			resultChan <- asrtypes.StreamingResult{Error: fmt.Errorf("xunfei decode response failed: %w", err)}
+			resultChan <- asrtypes.StreamingResult{Error: fmt.Errorf("xunfei decode response failed: %w", err), IsFinal: true}
 			return
 		}
 		if rsp.Code != 0 {
-			resultChan <- asrtypes.StreamingResult{Error: fmt.Errorf("xunfei asr error code=%d message=%s sid=%s", rsp.Code, rsp.Message, rsp.SID)}
+			resultChan <- asrtypes.StreamingResult{
+				Error:       fmt.Errorf("xunfei asr error code=%d message=%s sid=%s", rsp.Code, rsp.Message, rsp.SID),
+				IsFinal:     true,
+				RetryReason: classifyXunfeiRetryReason(rsp.Code, rsp.Message),
+			}
 			return
 		}
 
@@ -192,7 +203,7 @@ func (a *ASR) handleStreaming(ctx context.Context, conn *websocket.Conn, audioSt
 		}
 		if text != "" {
 			resultBuilder.WriteString(text)
-			resultChan <- asrtypes.StreamingResult{Text: text, IsFinal: false}
+			resultChan <- asrtypes.StreamingResult{Text: resultBuilder.String(), IsFinal: false}
 		}
 
 		if rsp.Data.Status == 2 {

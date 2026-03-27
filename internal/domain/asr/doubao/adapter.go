@@ -17,7 +17,7 @@ type DoubaoV2Adapter struct {
 func NewDoubaoV2Adapter(config map[string]interface{}) (*DoubaoV2Adapter, error) {
 
 	// 创建豆包ASR配置
-	doubaoConfig := DoubaoV2Config{}
+	doubaoConfig := DefaultConfig
 
 	// 从map中获取配置项
 	if appID, ok := config["appid"].(string); ok && appID != "" {
@@ -48,6 +48,20 @@ func NewDoubaoV2Adapter(config map[string]interface{}) (*DoubaoV2Adapter, error)
 	}
 	if enableDDC, ok := config["enable_ddc"].(bool); ok {
 		doubaoConfig.EnableDDC = enableDDC
+	}
+	if resultType, ok := config["result_type"].(string); ok && resultType != "" {
+		doubaoConfig.ResultType = resultType
+	}
+	if showUtterances, ok := config["show_utterances"].(bool); ok {
+		doubaoConfig.ShowUtterances = showUtterances
+	}
+	if forceToSpeechTime, ok := config["force_to_speech_time"].(int); ok && forceToSpeechTime > 0 {
+		doubaoConfig.ForceToSpeechTime = forceToSpeechTime
+	} else if forceToSpeechTimeFloat, ok := config["force_to_speech_time"].(float64); ok && forceToSpeechTimeFloat > 0 {
+		doubaoConfig.ForceToSpeechTime = int(forceToSpeechTimeFloat)
+	}
+	if enableNonstream, ok := config["enable_nonstream"].(bool); ok {
+		doubaoConfig.EnableNonstream = enableNonstream
 	}
 	if chunkDuration, ok := config["chunk_duration"].(int); ok && chunkDuration > 0 {
 		doubaoConfig.ChunkDuration = chunkDuration

@@ -170,7 +170,7 @@ const form = reactive({
   doubao: {
     appid: '',
     access_token: '',
-    ws_url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream',
+    ws_url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
     model_name: 'bigmodel',
     end_window_size: 800,
     enable_punc: true,
@@ -578,7 +578,7 @@ const resetForm = () => {
   form.doubao = {
     appid: '',
     access_token: '',
-    ws_url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream',
+    ws_url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
     resource_id: 'volc.bigasr.sauc.duration',
     model_name: 'bigmodel',
     end_window_size: 800,
