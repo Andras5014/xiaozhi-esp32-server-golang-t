@@ -456,7 +456,7 @@ func (a *ASRManager) RestartAsrRecognition(ctx context.Context) error {
 
 	// 重新创建ASR上下文和通道
 	state.Asr.Ctx, state.Asr.Cancel = context.WithCancel(ctx)
-	state.Asr.AsrAudioChannel = make(chan []float32, 100)
+	state.Asr.AsrAudioChannel = make(chan []float32, AsrAudioChannelCap)
 
 	// 重新启动流式识别
 	asrResultChannel, err := asrProvider.StreamingRecognize(state.Asr.Ctx, state.Asr.AsrAudioChannel)

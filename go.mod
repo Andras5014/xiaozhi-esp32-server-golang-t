@@ -8,7 +8,6 @@ require (
 	github.com/ThinkInAIXYZ/go-mcp v0.2.19
 	github.com/antonfisher/nested-logrus-formatter v1.3.1
 	github.com/asaskevich/EventBus v0.0.0-20200907212545-49d423059eef
-	github.com/bytedance/gopkg v0.1.3
 	github.com/bytedance/sonic v1.13.2
 	github.com/cloudwego/eino v0.3.40
 	github.com/cloudwego/eino-ext/components/model/ollama v0.0.0-20250530094010-bd1c4fc20bbe
@@ -26,6 +25,7 @@ require (
 	github.com/hackers365/go-webrtcvad v0.0.0-20250711024710-dde35479e077
 	github.com/hackers365/mem0-go v1.0.2
 	github.com/hraban/opus v0.0.0-20220302220929-eeacdbcb92d0
+	github.com/kardianos/service v1.2.4
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/mark3labs/mcp-go v0.36.0
 	github.com/memodb-io/memobase/src/client/memobase-go v0.0.0-20251008012534-936f45328453
@@ -89,7 +89,6 @@ require (
 	github.com/k2-fsa/sherpa-onnx-go-linux v1.12.4 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.12.4 // indirect
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.12.4 // indirect
-	github.com/kardianos/service v1.2.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lestrrat-go/strftime v1.1.0 // indirect

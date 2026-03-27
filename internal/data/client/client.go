@@ -409,7 +409,7 @@ func (s *ClientState) InitAsr() error {
 	s.Asr = Asr{
 		Ctx:             ctx,
 		Cancel:          cancel,
-		AsrAudioChannel: make(chan []float32, 100),
+		AsrAudioChannel: make(chan []float32, AsrAudioChannelCap),
 		AsrEnd:          make(chan bool, 1),
 		AsrResult:       bytes.Buffer{},
 		AsrType:         asrConfig.Provider,

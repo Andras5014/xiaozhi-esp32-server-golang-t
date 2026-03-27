@@ -145,13 +145,16 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 	}
 
 	handleInterrupt := func() {
-		t.drainSessionAudioQueue()
+		// 不再无条件清空 sessionAudioQueue：InterruptAndClearQueue 已递增 generation，
+		// 旧代际元素会被下方 generation 检查自动跳过。无条件 drain 会误删在
+		// interrupt 与 drain 之间入队的当前代际元素（如 TtsStart），导致设备
+		// 收不到 tts start 从而不播放音频。
 		t.drainDelayedSentenceReadyQueue()
 		totalFrames = 0
 		needReportFirstFrame = false
 		currentSentenceFrames = 0
 		playbackTail = time.Time{}
-		log.Debugf("runSenderLoop interrupt, drained queue and continue")
+		log.Debugf("runSenderLoop interrupt, continue")
 	}
 
 	for {
