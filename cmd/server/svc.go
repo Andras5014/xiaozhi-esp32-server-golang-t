@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
+	"path/filepath"
 	"sync"
 	"xiaozhi-esp32-server-golang/internal/app/server"
 	user_config "xiaozhi-esp32-server-golang/internal/domain/config"
@@ -145,12 +147,24 @@ func (p *program) Stop(s service.Service) error {
 func newService(cfg ServiceConfig) (service.Service, *program, error) {
 	prg := &program{cfg: cfg}
 
+	// 以二进制所在目录作为服务的工作目录，保证相对路径（如 manager.json）始终可寻址
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = "."
+	}
+	workDir := filepath.Dir(execPath)
+
 	svcCfg := &service.Config{
 		Name:        "XiaozhiServer",
 		DisplayName: "Xiaozhi ESP32 Server",
 		Description: "Xiaozhi ESP32 智能语音服务器",
 		// 将启动参数写入服务注册信息，保证 install 后自动启动时带上同样的 flag
 		Arguments: buildServiceArgs(cfg),
+		Option: service.KeyValue{
+			// systemd: WorkingDirectory=<binary所在目录>
+			// Windows SCM: AppDirectory
+			"WorkingDirectory": workDir,
+		},
 	}
 
 	s, err := service.New(prg, svcCfg)
