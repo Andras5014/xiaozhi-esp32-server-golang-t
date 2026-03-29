@@ -1203,6 +1203,8 @@ func (s *ChatSession) OnListenStart(startSeq uint64) error {
 
 	// 定义消息保存回调
 	onMessageSave := func(userMsg *schema.Message, messageID string, audioData []float32) {
+		// 工具回填后的二次 LLM 请求依赖会话内存历史，这里需要同步补入当前轮 user 消息。
+		s.clientState.AddMessage(userMsg)
 		// ASR 文本和音频同时获取，一次性保存（不需要两阶段）
 		eventbus.Get().Publish(eventbus.TopicAddMessage, &eventbus.AddMessageEvent{
 			ClientState: s.clientState,

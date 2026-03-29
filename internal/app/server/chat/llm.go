@@ -1351,6 +1351,22 @@ func cloneMessageForRequest(msg *schema.Message) *schema.Message {
 		respMetaCopy := *msg.ResponseMeta
 		msgCopy.ResponseMeta = &respMetaCopy
 	}
+	if msgCopy.Role == schema.Assistant && strings.TrimSpace(msgCopy.Content) == "" && len(msgCopy.ToolCalls) > 0 {
+		// 部分 OpenAI 兼容接口不接受 content 为空的 assistant/tool_calls 消息，
+		// 这里仅在请求阶段补一个稳定占位文本，不影响历史存储结构。
+		toolNames := make([]string, 0, len(msgCopy.ToolCalls))
+		for _, toolCall := range msgCopy.ToolCalls {
+			name := strings.TrimSpace(toolCall.Function.Name)
+			if name != "" {
+				toolNames = append(toolNames, name)
+			}
+		}
+		if len(toolNames) > 0 {
+			msgCopy.Content = "工具调用: " + strings.Join(toolNames, ", ")
+		} else {
+			msgCopy.Content = "工具调用"
+		}
+	}
 
 	return &msgCopy
 }
