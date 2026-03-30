@@ -21,6 +21,7 @@ const (
 	LlmTypeEino    = "eino"
 	LlmTypeDify    = "dify"
 	LlmTypeCoze    = "coze"
+	LlmTypeWeknora = "weknora"
 )
 
 const (
