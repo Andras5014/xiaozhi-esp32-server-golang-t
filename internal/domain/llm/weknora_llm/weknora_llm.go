@@ -123,6 +123,7 @@ func NewWeknoraLLMProvider(config map[string]interface{}) (*WeknoraLLMProvider, 
 		baseURL = defaultWeknoraBaseURL
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
+	baseURL = strings.TrimSuffix(baseURL, "/api/v1")
 
 	userPrefix, _ := config["user_prefix"].(string)
 	userPrefix = strings.TrimSpace(userPrefix)

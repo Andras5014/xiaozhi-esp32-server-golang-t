@@ -40,7 +40,7 @@
     </el-form-item>
 
     <el-form-item v-if="showBaseURL" label="基础URL" prop="base_url">
-      <el-input v-model="model.base_url" placeholder="请输入基础URL" style="width: 100%" />
+      <el-input v-model="model.base_url" :placeholder="isWeknora ? 'http://IP:8080（不含 /api/v1）' : '请输入基础URL'" style="width: 100%" />
     </el-form-item>
 
     <el-form-item v-if="isCoze" label="Bot ID" prop="bot_id">

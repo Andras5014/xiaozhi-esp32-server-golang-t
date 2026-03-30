@@ -278,6 +278,7 @@ func (ac *AdminController) ListWeknoraAgents(c *gin.Context) {
 	}
 
 	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	baseURL = strings.TrimSuffix(baseURL, "/api/v1")
 	apiKey := strings.TrimSpace(req.APIKey)
 	if baseURL == "" || apiKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "base_url 和 api_key 不能为空"})
@@ -322,7 +323,13 @@ func (ac *AdminController) ListWeknoraAgents(c *gin.Context) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "解析WeKnora智能体列表失败: " + err.Error()})
+		snippet := string(bodyBytes)
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("解析WeKnora智能体列表失败: %s (url=%s, body_prefix=%s)", err.Error(), endpoint, snippet),
+		})
 		return
 	}
 
