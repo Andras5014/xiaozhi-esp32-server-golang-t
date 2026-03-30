@@ -12,6 +12,7 @@ import (
 	"xiaozhi-esp32-server-golang/internal/domain/asr"
 	asr_types "xiaozhi-esp32-server-golang/internal/domain/asr/types"
 	"xiaozhi-esp32-server-golang/internal/domain/audio"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
 	"xiaozhi-esp32-server-golang/internal/domain/speaker"
 	"xiaozhi-esp32-server-golang/internal/domain/vad/inter"
 	"xiaozhi-esp32-server-golang/internal/pool"
@@ -463,8 +464,11 @@ func (a *ASRManager) RestartAsrRecognition(ctx context.Context) error {
 
 	state.AsrResultChannel = asrResultChannel
 	state.Asr.SetPendingRestartOnVoice(false)
-	// 设置ASR开始时间，用于统计识别耗时
-	state.SetStartAsrTs()
+	// 重置统计时间，用于计算本轮对话的整体耗时
+	state.MarkTurnStart()
+	if a.session != nil {
+		a.session.TraceTurnStart(state.Asr.Ctx, state.Statistic.TurnStartTs)
+	}
 	log.Debugf("重启ASR识别成功")
 	return nil
 }
@@ -607,7 +611,43 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				recoverableErrorWindowStart = time.Now()
 				recoverableErrorCount = 0
 
-				// 创建用户消息
+				//如果是realtime模式下，需要停止 当前的llm和tts
+				if state.IsRealTime() && viper.GetInt("chat.realtime_mode") == 2 {
+					log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
+					state.AfterAsrSessionCtx.CancelWithReason("ASRManager.StartAsrRecognitionLoop: realtime_mode=2 ASR result interrupt")
+					if a.session != nil {
+						a.session.InterruptAndClearTTSQueue()
+					}
+				}
+
+				// 重置重试计数器
+				startIdleTime = time.Now().Unix()
+
+				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
+				state.OnVoiceSilence()
+
+				// 获取暂存的声纹结果（带超时）
+				speakerResult := a.getSpeakerResult()
+				state.MarkAsrFinalText()
+				if a.session != nil {
+					a.session.TraceAsrFinalText(ctx, time.Now().UnixMilli())
+				}
+
+				if a.session != nil {
+					payload, stop, hookErr := a.session.hookHub.EmitASROutput(a.session.hookContext(ctx), chathooks.ASROutputData{Text: text, SpeakerResult: speakerResult})
+					if hookErr != nil {
+						log.Warnf("ASR_OUTPUT hook 执行失败: %v", hookErr)
+					}
+					text = payload.Text
+					speakerResult = payload.SpeakerResult
+					if stop {
+						log.Infof("ASR_OUTPUT hook 请求停止当前流程")
+						state.Asr.ClearHistoryAudio()
+						continue
+					}
+				}
+
+				// 创建用户消息，使用 hook 改写后的文本进入后续副作用链
 				userMsg := &schema.Message{
 					Role:    schema.User,
 					Content: text,
@@ -635,22 +675,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 					onMessageSave(userMsg, messageID, audioData)
 				}
 
-				//如果是realtime模式下，需要停止 当前的llm和tts
-				if state.IsRealTime() && viper.GetInt("chat.realtime_mode") == 2 {
-					log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
-					state.AfterAsrSessionCtx.CancelWithReason("ASRManager.StartAsrRecognitionLoop: realtime_mode=2 ASR result interrupt")
-					if a.session != nil {
-						a.session.InterruptAndClearTTSQueue()
-					}
-				}
-
-				// 重置重试计数器
-				startIdleTime = time.Now().Unix()
-
-				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
-				state.OnVoiceSilence()
-
-				//发送asr消息
+				// 发送给客户端的 ASR 结果也使用 hook 改写后的文本
 				err = a.serverTransport.SendAsrResult(text)
 				if err != nil {
 					log.Errorf("发送asr消息失败: %v", err)
@@ -659,9 +684,6 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 					}
 					return
 				}
-
-				// 获取暂存的声纹结果（带超时）
-				speakerResult := a.getSpeakerResult()
 
 				// 添加到队列（迁移到 ASRManager 中处理）
 				if err := a.addAsrResultToQueue(text, speakerResult); err != nil {

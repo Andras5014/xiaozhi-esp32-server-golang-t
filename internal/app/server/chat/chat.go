@@ -4,16 +4,21 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/spf13/viper"
 
 	"xiaozhi-esp32-server-golang/constants"
+	"xiaozhi-esp32-server-golang/internal/app/server/chat/plugins"
 	types_conn "xiaozhi-esp32-server-golang/internal/app/server/types"
 	types_audio "xiaozhi-esp32-server-golang/internal/data/audio"
 	. "xiaozhi-esp32-server-golang/internal/data/client"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
+	"xiaozhi-esp32-server-golang/internal/domain/chat/streamtransform"
 	userconfig "xiaozhi-esp32-server-golang/internal/domain/config"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
 	"xiaozhi-esp32-server-golang/internal/domain/openclaw"
+	pkghooks "xiaozhi-esp32-server-golang/internal/pkg/hooks"
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
@@ -32,6 +37,55 @@ type ChatManager struct {
 }
 
 type ChatManagerOption func(*ChatManager)
+
+var (
+	chatHookAsyncExecutorOnce sync.Once
+	chatHookAsyncExecutor     *pkghooks.AsyncExecutor
+)
+
+func sharedChatHookAsyncExecutor() *pkghooks.AsyncExecutor {
+	chatHookAsyncExecutorOnce.Do(func() {
+		asyncCfg := pkghooks.AsyncConfig{
+			QueueSize:    viper.GetInt("chat_hooks.async.queue_size"),
+			WorkerCount:  viper.GetInt("chat_hooks.async.worker_count"),
+			DropWhenFull: viper.GetBool("chat_hooks.async.drop_when_full"),
+			Timeout:      time.Duration(viper.GetInt("chat_hooks.async.timeout_ms")) * time.Millisecond,
+		}
+		chatHookAsyncExecutor = pkghooks.NewAsyncExecutor(context.Background(), asyncCfg)
+		log.Infof("初始化全局共享 chat hook observer executor: queue_size=%d worker_count=%d drop_when_full=%v timeout=%s", asyncCfg.QueueSize, asyncCfg.WorkerCount, asyncCfg.DropWhenFull, asyncCfg.Timeout)
+	})
+	return chatHookAsyncExecutor
+}
+
+func newChatHookHub(parent context.Context) *chathooks.Hub {
+	asyncCfg := pkghooks.AsyncConfig{
+		QueueSize:    viper.GetInt("chat_hooks.async.queue_size"),
+		WorkerCount:  viper.GetInt("chat_hooks.async.worker_count"),
+		DropWhenFull: viper.GetBool("chat_hooks.async.drop_when_full"),
+		Timeout:      time.Duration(viper.GetInt("chat_hooks.async.timeout_ms")) * time.Millisecond,
+	}
+	hub := chathooks.NewHub(parent, pkghooks.WithAsyncConfig(asyncCfg), pkghooks.WithAsyncExecutor(sharedChatHookAsyncExecutor()))
+	stats := hub.Stats()
+	log.Infof("初始化 chat hook hub: queue_size=%d worker_count=%d drop_when_full=%v timeout=%s dropped_async=%d", asyncCfg.QueueSize, asyncCfg.WorkerCount, asyncCfg.DropWhenFull, asyncCfg.Timeout, stats.DroppedAsync)
+	return hub
+}
+
+func chatHookBuiltinOverrides() map[string]chathooks.BuiltinPluginConfig {
+	overrides := map[string]chathooks.BuiltinPluginConfig{}
+	for _, reg := range chathooks.BuiltinRegistrations() {
+		path := "chat_hooks.plugins." + reg.Meta.Name
+		cfg := chathooks.BuiltinPluginConfig{}
+		if viper.IsSet(path + ".enabled") {
+			enabled := viper.GetBool(path + ".enabled")
+			cfg.Enabled = &enabled
+		}
+		if viper.IsSet(path + ".priority") {
+			cfg.Priority = viper.GetInt(path + ".priority")
+		}
+		overrides[reg.Meta.Name] = cfg
+	}
+	return overrides
+}
 
 func NewChatManager(deviceID string, transport types_conn.IConn, options ...ChatManagerOption) (*ChatManager, error) {
 
@@ -61,10 +115,23 @@ func NewChatManager(deviceID string, transport types_conn.IConn, options ...Chat
 	cm.transport.OnClose(cm.OnClose)
 
 	serverTransport := NewServerTransport(cm.transport, clientState)
+	hookHub := newChatHookHub(cm.ctx)
+	if !viper.IsSet("chat_hooks.enabled") || viper.GetBool("chat_hooks.enabled") {
+		if err := chathooks.RegisterBuiltinPlugins(hookHub, chatHookBuiltinOverrides()); err != nil {
+			log.Errorf("注册 chat hook builtin plugins 失败: %v", err)
+			cm.transport.Close()
+			return nil, err
+		}
+		log.Infof("已加载 chat hook plugins: %+v", hookHub.PluginMetas())
+	}
+	transformRegistry := streamtransform.NewRegistry()
+	plugins.Init(transformRegistry)
 
 	cm.session = NewChatSession(
 		clientState,
 		serverTransport,
+		hookHub,
+		transformRegistry,
 	)
 
 	return cm, nil

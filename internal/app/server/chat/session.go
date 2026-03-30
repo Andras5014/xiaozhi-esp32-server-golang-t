@@ -19,6 +19,8 @@ import (
 	. "xiaozhi-esp32-server-golang/internal/data/client"
 	"xiaozhi-esp32-server-golang/internal/data/history"
 	. "xiaozhi-esp32-server-golang/internal/data/msg"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
+	"xiaozhi-esp32-server-golang/internal/domain/chat/streamtransform"
 	user_config "xiaozhi-esp32-server-golang/internal/domain/config"
 	"xiaozhi-esp32-server-golang/internal/domain/config/types"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
@@ -77,17 +79,20 @@ type ChatSession struct {
 
 	openClawWarmupMu sync.Mutex
 	openClawWarmup   *openClawWarmupTask
+
+	hookHub *chathooks.Hub
 }
 
 type ChatSessionOption func(*ChatSession)
 
-func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, opts ...ChatSessionOption) *ChatSession {
+func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, hookHub *chathooks.Hub, transformRegistry *streamtransform.Registry, opts ...ChatSessionOption) *ChatSession {
 	s := &ChatSession{
 		clientState:        clientState,
 		serverTransport:    serverTransport,
 		chatTextQueue:      util.NewQueue[AsrResponseChannelItem](10),
 		speakerResultReady: make(chan struct{}, 1), // 缓冲为1，避免阻塞
 		openClawStreams:    make(map[string]chan llm_common.LLMResponseStruct),
+		hookHub:            hookHub,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -95,8 +100,8 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 
 	s.asrManager = NewASRManager(clientState, serverTransport)
 	s.asrManager.session = s // 设置 session 引用
-	s.ttsManager = NewTTSManager(clientState, serverTransport)
-	s.llmManager = NewLLMManager(clientState, serverTransport, s.ttsManager)
+	s.ttsManager = NewTTSManager(clientState, serverTransport, s)
+	s.llmManager = NewLLMManager(clientState, serverTransport, s.ttsManager, s, transformRegistry)
 
 	// 如果启用声纹识别，创建声纹管理器
 	if clientState.IsSpeakerEnabled() {
@@ -199,6 +204,8 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 	clientState.OnAsrFirstTextCallback = func(text string, isFinal bool) {
 		clientState.Asr.MarkTextReceived()
 		log.Debugf("ASR首次返回字符: device=%s, text=%s, isFinal=%v", clientState.DeviceID, text, isFinal)
+		clientState.MarkAsrFirstText()
+		s.TraceAsrFirstText(clientState.Ctx, time.Now().UnixMilli())
 		if clientState.IsRealTime() && viper.GetInt("chat.realtime_mode") == 4 {
 			clientState.AfterAsrSessionCtx.CancelWithReason("ChatSession.OnAsrFirstTextCallback: realtime_mode=4")
 			s.InterruptAndClearTTSQueue()
@@ -787,9 +794,11 @@ func (s *ChatSession) HandleNotActivated() {
 	defer s.ttsManager.EnqueueTtsStop(s.clientState.Ctx)
 
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
-	_ = s.ttsManager.handleTextResponse(s.clientState.AfterAsrSessionCtx.Get(sessionCtx), llm_common.LLMResponseStruct{
+	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
+	err = s.ttsManager.handleTextResponse(ctx, llm_common.LLMResponseStruct{
 		Text: fmt.Sprintf("请在后台添加设备，激活码: %s", code),
 	}, false)
+	s.ttsManager.RequestTurnEnd(ctx, err)
 
 }
 
@@ -801,7 +810,8 @@ func (s *ChatSession) HandleWelcome() {
 	s.clientState.IsWelcomeSpeaking = true
 	s.clientState.IsWelcomePlaying = true
 	s.ttsManager.EnqueueTtsStart(s.clientState.Ctx)
-	s.ttsManager.handleTts(ctx, s.ttsManager.currentAudioGeneration(), llm_common.LLMResponseStruct{Text: greetingText}, nil, nil)
+	err := s.ttsManager.handleTts(ctx, s.ttsManager.currentAudioGeneration(), s.ttsManager.currentTtsMetricCycle(), llm_common.LLMResponseStruct{Text: greetingText}, nil, nil)
+	s.ttsManager.RequestTurnEnd(ctx, err)
 	s.ttsManager.EnqueueTtsStop(s.clientState.Ctx)
 }
 
@@ -899,11 +909,18 @@ func (s *ChatSession) getOrCreateOpenClawStream(correlationID string) (chan llm_
 			if !s.clientState.IsRealTime() {
 				s.ttsManager.EnqueueTtsStop(ctx)
 			}
+			s.ttsManager.RequestTurnEnd(ctx, err)
 			s.finishOpenClawWarmup(correlationID, false)
 		}
 	}
 	log.Infof("OpenClaw stream created: device=%s correlation_id=%s warmup_attached=%v", s.clientState.DeviceID, correlationID, hasWarmup)
 	if err := s.llmManager.HandleLLMResponseChannelAsyncWithOptions(ctx, nil, streamChan, options); err != nil {
+		if hasWarmup && !s.clientState.IsRealTime() {
+			s.ttsManager.EnqueueTtsStop(ctx)
+		}
+		if hasWarmup {
+			s.ttsManager.RequestTurnEnd(ctx, err)
+		}
 		s.openClawStreamMu.Lock()
 		delete(s.openClawStreams, correlationID)
 		s.openClawStreamMu.Unlock()
@@ -994,7 +1011,7 @@ func (s *ChatSession) InjectOpenClawResponse(event openclaw.ResponseDelivery) er
 
 // InterruptAndClearTTSQueue 触发 TTS 打断并清空发送队列（供 realtime 模式 VAD 打断等场景调用）
 func (s *ChatSession) InterruptAndClearTTSQueue() {
-	s.ttsManager.InterruptAndClearQueue()
+	s.ttsManager.InterruptAndStop(s.clientState.Ctx, true, context.Canceled)
 }
 
 // handleAbortMessage 处理中止消息
@@ -1299,6 +1316,7 @@ func (s *ChatSession) DoExitChat() {
 		log.Errorf("发送再见语失败: %v", err)
 	}
 
+	s.ttsManager.RequestTurnEnd(ctx, err)
 	s.ttsManager.EnqueueTtsStop(ctx)
 	// 关闭会话
 	s.Close()
@@ -1336,6 +1354,10 @@ func (s *ChatSession) Close() {
 
 		if s.speakerManager != nil {
 			s.speakerManager.Close()
+		}
+
+		if s.hookHub != nil {
+			s.hookHub.Close()
 		}
 
 		if s.clientState != nil {
@@ -1635,4 +1657,70 @@ func (s *ChatSession) switchTTSForSpeaker(speakerResult *speaker.IdentifyResult)
 		speakerGroupInfo.Voice)
 
 	return nil
+}
+
+func (s *ChatSession) hookContext(ctx context.Context) chathooks.Context {
+	sessionID := ""
+	deviceID := ""
+	if s != nil && s.clientState != nil {
+		sessionID = s.clientState.SessionID
+		deviceID = s.clientState.DeviceID
+	}
+
+	return chathooks.Context{
+		Ctx:       ctx,
+		SessionID: sessionID,
+		DeviceID:  deviceID,
+	}
+}
+
+func (s *ChatSession) emitMetricStage(ctx context.Context, stage chathooks.MetricStage, ts int64, err error) {
+	if s == nil {
+		return
+	}
+
+	hookErr := s.hookHub.EmitMetric(s.hookContext(ctx), chathooks.MetricData{Stage: stage, Ts: ts, Err: err})
+	if hookErr != nil {
+		log.Warnf("METRIC hook 执行失败: stage=%s err=%v", stage, hookErr)
+	}
+}
+
+func (s *ChatSession) TraceTurnStart(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricTurnStart, ts, nil)
+}
+
+func (s *ChatSession) TraceTurnEnd(ctx context.Context, ts int64, err error) {
+	s.emitMetricStage(ctx, chathooks.MetricTurnEnd, ts, err)
+}
+
+func (s *ChatSession) TraceAsrFirstText(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricAsrFirstText, ts, nil)
+}
+
+func (s *ChatSession) TraceAsrFinalText(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricAsrFinalText, ts, nil)
+}
+
+func (s *ChatSession) TraceLlmStart(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricLlmStart, ts, nil)
+}
+
+func (s *ChatSession) TraceLlmFirstToken(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricLlmFirstToken, ts, nil)
+}
+
+func (s *ChatSession) TraceLlmEnd(ctx context.Context, ts int64, err error) {
+	s.emitMetricStage(ctx, chathooks.MetricLlmEnd, ts, err)
+}
+
+func (s *ChatSession) TraceTtsStart(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricTtsStart, ts, nil)
+}
+
+func (s *ChatSession) TraceTtsFirstFrame(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricTtsFirstFrame, ts, nil)
+}
+
+func (s *ChatSession) TraceTtsStop(ctx context.Context, ts int64, err error) {
+	s.emitMetricStage(ctx, chathooks.MetricTtsStop, ts, err)
 }
