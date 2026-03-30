@@ -310,6 +310,18 @@ func (ac *AdminController) ListWeknoraAgents(c *gin.Context) {
 		return
 	}
 
+	bodyStr := string(bodyBytes)
+	if strings.Contains(strings.ToLower(bodyStr), "<html") || strings.Contains(bodyStr, "<!DOCTYPE") {
+		snippet := bodyStr
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("WeKnora返回了HTML页面而非JSON，请检查base_url是否正确（不应包含/api/v1）(url=%s, body_prefix=%s)", endpoint, snippet),
+		})
+		return
+	}
+
 	var parsed struct {
 		Success bool `json:"success"`
 		Data    []struct {
@@ -323,7 +335,7 @@ func (ac *AdminController) ListWeknoraAgents(c *gin.Context) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
-		snippet := string(bodyBytes)
+		snippet := bodyStr
 		if len(snippet) > 200 {
 			snippet = snippet[:200]
 		}

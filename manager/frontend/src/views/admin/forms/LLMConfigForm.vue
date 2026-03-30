@@ -55,10 +55,6 @@
       <el-input v-model="model.connector_id" placeholder="可选，默认 1024" />
     </el-form-item>
 
-    <el-form-item v-if="isWeknora" label="知识库ID" prop="knowledge_base_id">
-      <el-input v-model="model.knowledge_base_id" placeholder="可选，WeKnora 知识库 ID" />
-    </el-form-item>
-
     <el-form-item v-if="isWeknora" label="智能体" prop="agent_id">
       <div style="display: flex; gap: 8px; width: 100%">
         <el-select
@@ -78,6 +74,7 @@
         <el-button :loading="weknoraAgentLoading" @click="fetchWeknoraAgents">加载</el-button>
       </div>
       <div v-if="weknoraAgentError" style="color: var(--el-color-danger); font-size: 12px; margin-top: 4px">{{ weknoraAgentError }}</div>
+      <div style="color: var(--el-color-info); font-size: 12px; margin-top: 4px">知识库配置由 WeKnora 智能体管理，请在 WeKnora 管理界面中为智能体关联知识库并设置 context_template</div>
     </el-form-item>
 
     <el-form-item v-if="isWeknora" label="网络搜索" prop="web_search_enabled">
@@ -266,7 +263,6 @@ function getJsonData() {
       api_key: m.api_key,
       base_url: m.base_url,
       user_prefix: m.user_prefix,
-      knowledge_base_id: m.knowledge_base_id,
       agent_id: m.agent_id,
       agent_enabled: true,
       web_search_enabled: !!m.web_search_enabled

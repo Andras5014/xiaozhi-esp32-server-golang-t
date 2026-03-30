@@ -45,7 +45,6 @@ type WeknoraLLMProvider struct {
 	apiKey           string
 	baseURL          string
 	userPrefix       string
-	knowledgeBaseID  string
 	agentID          string
 	agentEnabled     bool
 	webSearchEnabled bool
@@ -56,7 +55,7 @@ type WeknoraLLMProvider struct {
 }
 
 type weknoraCreateSessionRequest struct {
-	KnowledgeBaseID string `json:"knowledge_base_id,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 type weknoraCreateSessionResponse struct {
@@ -69,11 +68,10 @@ type weknoraSessionData struct {
 }
 
 type weknoraAgentChatRequest struct {
-	Query            string   `json:"query"`
-	AgentEnabled     bool     `json:"agent_enabled"`
-	WebSearchEnabled bool     `json:"web_search_enabled,omitempty"`
-	KnowledgeBaseIDs []string `json:"knowledge_base_ids,omitempty"`
-	AgentID          string   `json:"agent_id,omitempty"`
+	Query            string `json:"query"`
+	AgentEnabled     bool   `json:"agent_enabled"`
+	WebSearchEnabled bool   `json:"web_search_enabled,omitempty"`
+	AgentID          string `json:"agent_id,omitempty"`
 }
 
 type weknoraStreamEvent struct {
@@ -122,17 +120,18 @@ func NewWeknoraLLMProvider(config map[string]interface{}) (*WeknoraLLMProvider, 
 	if baseURL == "" {
 		baseURL = defaultWeknoraBaseURL
 	}
+	rawURL := baseURL
 	baseURL = strings.TrimRight(baseURL, "/")
 	baseURL = strings.TrimSuffix(baseURL, "/api/v1")
+	if rawURL != baseURL {
+		log.Infof("weknora base_url已自动规范化: %q -> %q", rawURL, baseURL)
+	}
 
 	userPrefix, _ := config["user_prefix"].(string)
 	userPrefix = strings.TrimSpace(userPrefix)
 	if userPrefix == "" {
 		userPrefix = defaultUserPrefix
 	}
-
-	knowledgeBaseID, _ := config["knowledge_base_id"].(string)
-	knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
 
 	agentID, _ := config["agent_id"].(string)
 	agentID = strings.TrimSpace(agentID)
@@ -155,7 +154,6 @@ func NewWeknoraLLMProvider(config map[string]interface{}) (*WeknoraLLMProvider, 
 		apiKey:           apiKey,
 		baseURL:          baseURL,
 		userPrefix:       userPrefix,
-		knowledgeBaseID:  knowledgeBaseID,
 		agentID:          agentID,
 		agentEnabled:     agentEnabled,
 		webSearchEnabled: webSearchEnabled,
@@ -187,9 +185,6 @@ func (p *WeknoraLLMProvider) ResponseWithContext(ctx context.Context, sessionID 
 			AgentEnabled:     p.agentEnabled,
 			WebSearchEnabled: p.webSearchEnabled,
 		}
-		if p.knowledgeBaseID != "" {
-			reqBody.KnowledgeBaseIDs = []string{p.knowledgeBaseID}
-		}
 		if p.agentID != "" {
 			reqBody.AgentID = p.agentID
 		}
@@ -201,6 +196,8 @@ func (p *WeknoraLLMProvider) ResponseWithContext(ctx context.Context, sessionID 
 		}
 
 		url := p.baseURL + agentChatPath + weknoraSessionID
+		log.Debugf("weknora agent-chat request: url=%s body=%s", url, string(bodyBytes))
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 		if err != nil {
 			sendLLMError(out, err)
@@ -216,15 +213,19 @@ func (p *WeknoraLLMProvider) ResponseWithContext(ctx context.Context, sessionID 
 			return
 		}
 		defer resp.Body.Close()
+		log.Debugf("weknora agent-chat response: status=%d", resp.StatusCode)
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+			log.Warnf("weknora agent-chat error: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(errBody)))
 			sendLLMError(out, fmt.Errorf("weknora请求失败 status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(errBody))))
 			return
 		}
 
 		var lastMessageID string
+		var eventCount int
 		for event, eventErr := range sse.Read(resp.Body, nil) {
+			eventCount++
 			if eventErr != nil {
 				if ctx.Err() != nil {
 					break
@@ -251,6 +252,10 @@ func (p *WeknoraLLMProvider) ResponseWithContext(ctx context.Context, sessionID 
 				lastMessageID = streamEvent.ID
 			}
 
+			if streamEvent.ResponseType != "answer" {
+				log.Debugf("weknora stream event #%d: type=%s done=%v content_len=%d", eventCount, streamEvent.ResponseType, streamEvent.Done, len(streamEvent.Content))
+			}
+
 			switch streamEvent.ResponseType {
 			case "error":
 				msg := streamEvent.Content
@@ -268,13 +273,15 @@ func (p *WeknoraLLMProvider) ResponseWithContext(ctx context.Context, sessionID 
 					}
 				}
 				if streamEvent.Done {
+					log.Debugf("weknora stream completed after %d events", eventCount)
 					return
 				}
 			case "complete":
+				log.Debugf("weknora stream completed (explicit) after %d events", eventCount)
 				return
 			default:
-				// thinking, tool_call, tool_result, references, reflection, agent_query
 				if streamEvent.Done && streamEvent.ResponseType != "agent_query" {
+					log.Debugf("weknora stream event type=%s signaled done after %d events", streamEvent.ResponseType, eventCount)
 					return
 				}
 			}
@@ -299,16 +306,14 @@ func (p *WeknoraLLMProvider) getOrCreateSession(ctx context.Context, sessionID s
 	p.sessionMu.RUnlock()
 
 	reqBody := weknoraCreateSessionRequest{}
-	if p.knowledgeBaseID != "" {
-		reqBody.KnowledgeBaseID = p.knowledgeBaseID
-	}
-
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", err
 	}
 
 	url := p.baseURL + sessionCreatePath
+	log.Debugf("weknora create-session request: url=%s body=%s", url, string(bodyBytes))
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", err
@@ -321,6 +326,7 @@ func (p *WeknoraLLMProvider) getOrCreateSession(ctx context.Context, sessionID s
 		return "", fmt.Errorf("创建weknora session失败: %w", err)
 	}
 	defer resp.Body.Close()
+	log.Debugf("weknora create-session response: status=%d", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
@@ -424,9 +430,6 @@ func (p *WeknoraLLMProvider) GetModelInfo() map[string]interface{} {
 		"type":     "weknora",
 		"provider": "weknora",
 		"base_url": p.baseURL,
-	}
-	if p.knowledgeBaseID != "" {
-		info["knowledge_base_id"] = p.knowledgeBaseID
 	}
 	if p.agentID != "" {
 		info["agent_id"] = p.agentID
