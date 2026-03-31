@@ -267,6 +267,105 @@ func (ac *AdminController) ListWeknoraModels(c *gin.Context) {
 	})
 }
 
+func (ac *AdminController) ListWeknoraAgents(c *gin.Context) {
+	var req struct {
+		BaseURL string `json:"base_url" binding:"required"`
+		APIKey  string `json:"api_key" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
+		return
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	baseURL = strings.TrimSuffix(baseURL, "/api/v1")
+	apiKey := strings.TrimSpace(req.APIKey)
+	if baseURL == "" || apiKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "base_url 和 api_key 不能为空"})
+		return
+	}
+
+	endpoint := baseURL + "/api/v1/agents"
+	client := &http.Client{Timeout: 20 * time.Second}
+	httpReq, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "创建请求失败: " + err.Error()})
+		return
+	}
+	httpReq.Header.Set("X-API-Key", apiKey)
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "拉取WeKnora智能体列表失败: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":       fmt.Sprintf("拉取WeKnora智能体列表失败 status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))),
+			"status_code": resp.StatusCode,
+		})
+		return
+	}
+
+	bodyStr := string(bodyBytes)
+	if strings.Contains(strings.ToLower(bodyStr), "<html") || strings.Contains(bodyStr, "<!DOCTYPE") {
+		snippet := bodyStr
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("WeKnora返回了HTML页面而非JSON，请检查base_url是否正确（不应包含/api/v1）(url=%s, body_prefix=%s)", endpoint, snippet),
+		})
+		return
+	}
+
+	var parsed struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			IsBuiltin   bool   `json:"is_builtin"`
+			Config      struct {
+				AgentMode string `json:"agent_mode"`
+			} `json:"config"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+		snippet := bodyStr
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("解析WeKnora智能体列表失败: %s (url=%s, body_prefix=%s)", err.Error(), endpoint, snippet),
+		})
+		return
+	}
+
+	type agentOption struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		IsBuiltin   bool   `json:"is_builtin"`
+		AgentMode   string `json:"agent_mode"`
+	}
+	agents := make([]agentOption, 0, len(parsed.Data))
+	for _, a := range parsed.Data {
+		agents = append(agents, agentOption{
+			ID:          a.ID,
+			Name:        a.Name,
+			Description: a.Description,
+			IsBuiltin:   a.IsBuiltin,
+			AgentMode:   a.Config.AgentMode,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": agents})
+}
+
 func extractWeknoraModelOptions(parsed map[string]interface{}) []knowledgeProviderModelOption {
 	if len(parsed) == 0 {
 		return []knowledgeProviderModelOption{}

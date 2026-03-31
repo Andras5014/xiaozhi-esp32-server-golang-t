@@ -12,6 +12,7 @@
         <el-option label="DeepSeek" value="deepseek" />
         <el-option label="Dify" value="dify" />
         <el-option label="Coze" value="coze" />
+        <el-option label="WeKnora" value="weknora" />
       </el-select>
     </el-form-item>
     <el-form-item label="配置名称" prop="name">
@@ -26,6 +27,7 @@
         <el-option label="Ollama" value="ollama" />
         <el-option label="Dify" value="dify" />
         <el-option label="Coze" value="coze" />
+        <el-option label="WeKnora" value="weknora" />
       </el-select>
     </el-form-item>
 
@@ -38,19 +40,45 @@
     </el-form-item>
 
     <el-form-item v-if="showBaseURL" label="基础URL" prop="base_url">
-      <el-input v-model="model.base_url" placeholder="请输入基础URL" style="width: 100%" />
+      <el-input v-model="model.base_url" :placeholder="isWeknora ? 'http://IP:8080（不含 /api/v1）' : '请输入基础URL'" style="width: 100%" />
     </el-form-item>
 
     <el-form-item v-if="isCoze" label="Bot ID" prop="bot_id">
       <el-input v-model="model.bot_id" placeholder="请输入 Coze Bot ID" />
     </el-form-item>
 
-    <el-form-item v-if="isDify || isCoze" label="User前缀" prop="user_prefix">
+    <el-form-item v-if="isDify || isCoze || isWeknora" label="User前缀" prop="user_prefix">
       <el-input v-model="model.user_prefix" placeholder="可选，默认 xiaozhi" />
     </el-form-item>
 
     <el-form-item v-if="isCoze" label="Connector ID" prop="connector_id">
       <el-input v-model="model.connector_id" placeholder="可选，默认 1024" />
+    </el-form-item>
+
+    <el-form-item v-if="isWeknora" label="智能体" prop="agent_id">
+      <div style="display: flex; gap: 8px; width: 100%">
+        <el-select
+          v-model="model.agent_id"
+          placeholder="请先加载智能体列表"
+          style="flex: 1"
+          clearable
+          :loading="weknoraAgentLoading"
+        >
+          <el-option
+            v-for="agent in weknoraAgents"
+            :key="agent.id"
+            :label="`${agent.name}${agent.agent_mode ? ' (' + agent.agent_mode + ')' : ''}`"
+            :value="agent.id"
+          />
+        </el-select>
+        <el-button :loading="weknoraAgentLoading" @click="fetchWeknoraAgents">加载</el-button>
+      </div>
+      <div v-if="weknoraAgentError" style="color: var(--el-color-danger); font-size: 12px; margin-top: 4px">{{ weknoraAgentError }}</div>
+      <div style="color: var(--el-color-info); font-size: 12px; margin-top: 4px">知识库配置由 WeKnora 智能体管理，请在 WeKnora 管理界面中为智能体关联知识库并设置 context_template</div>
+    </el-form-item>
+
+    <el-form-item v-if="isWeknora" label="网络搜索" prop="web_search_enabled">
+      <el-switch v-model="model.web_search_enabled" />
     </el-form-item>
 
     <el-form-item v-if="isOpenAIOrOllama" label="max_tokens" prop="max_tokens">
@@ -69,6 +97,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import api from '@/utils/api'
 
 const quickUrls = {
   openai: 'https://api.openai.com/v1',
@@ -79,7 +108,8 @@ const quickUrls = {
   doubao: 'https://ark.cn-beijing.volces.com/api/v3',
   siliconflow: 'https://api.siliconflow.cn/v1',
   deepseek: 'https://api.deepseek.com/v1',
-  dify: 'https://api.dify.ai/v1'
+  dify: 'https://api.dify.ai/v1',
+  weknora: 'http://127.0.0.1:8080'
 }
 
 const props = defineProps({
@@ -90,25 +120,45 @@ const props = defineProps({
 const formRef = ref()
 const providerTypeMap = {
   dify: 'dify',
-  coze: 'coze'
+  coze: 'coze',
+  weknora: 'weknora'
 }
 
 const isOpenAIOrOllama = computed(() => props.model?.type === 'openai' || props.model?.type === 'ollama')
 const isDify = computed(() => props.model?.type === 'dify')
 const isCoze = computed(() => props.model?.type === 'coze')
+const isWeknora = computed(() => props.model?.type === 'weknora')
 const showBaseURL = computed(() => true)
 
-watch(() => props.model?.provider, (value) => {
-  if (!value || !props.model) {
+const weknoraAgents = ref([])
+const weknoraAgentLoading = ref(false)
+const weknoraAgentError = ref('')
+
+async function fetchWeknoraAgents() {
+  const baseURL = String(props.model?.base_url || '').trim()
+  const apiKey = String(props.model?.api_key || '').trim()
+  if (!baseURL || !apiKey) {
+    weknoraAgentError.value = '请先填写基础URL和API密钥'
     return
   }
-  if (providerTypeMap[value]) {
-    props.model.type = providerTypeMap[value]
+  weknoraAgentLoading.value = true
+  weknoraAgentError.value = ''
+  try {
+    const res = await api.post('/admin/llm-configs/weknora/agents', {
+      base_url: baseURL,
+      api_key: apiKey
+    })
+    weknoraAgents.value = res.data?.data || []
+    if (weknoraAgents.value.length === 0) {
+      weknoraAgentError.value = 'WeKnora 上暂无可用智能体'
+    }
+  } catch (e) {
+    weknoraAgentError.value = e.response?.data?.error || e.message || '加载失败'
+    weknoraAgents.value = []
+  } finally {
+    weknoraAgentLoading.value = false
   }
-  if (quickUrls[value]) {
-    props.model.base_url = quickUrls[value]
-  }
-}, { immediate: true })
+}
 
 watch(() => props.model?.type, (value) => {
   if (!value || !props.model) {
@@ -135,7 +185,16 @@ watch(() => props.model?.type, (value) => {
       props.model.connector_id = '1024'
     }
   }
-}, { immediate: true })
+  if (value === 'weknora') {
+    props.model.provider = 'weknora'
+    if (!props.model.base_url) {
+      props.model.base_url = quickUrls.weknora
+    }
+    if (!props.model.model_name) {
+      props.model.model_name = 'weknora'
+    }
+  }
+})
 
 function onProviderChange(value) {
   if (!value || !props.model) {
@@ -153,11 +212,23 @@ function onTypeChange(value) {
   if (!props.model || !value) {
     return
   }
-  if (value === 'dify' && !props.model.provider) {
+  if (value === 'dify') {
     props.model.provider = 'dify'
+    if (!props.model.base_url) {
+      props.model.base_url = quickUrls.dify
+    }
   }
-  if (value === 'coze' && !props.model.provider) {
+  if (value === 'coze') {
     props.model.provider = 'coze'
+    if (!props.model.base_url) {
+      props.model.base_url = 'https://api.coze.com'
+    }
+  }
+  if (value === 'weknora') {
+    props.model.provider = 'weknora'
+    if (!props.model.base_url) {
+      props.model.base_url = quickUrls.weknora
+    }
   }
   if (value === 'openai' && !props.model.base_url) {
     props.model.base_url = quickUrls.openai
@@ -183,6 +254,18 @@ function getJsonData() {
       bot_id: m.bot_id,
       user_prefix: m.user_prefix,
       connector_id: m.connector_id
+    }
+    return JSON.stringify(config, null, 2)
+  }
+  if (m.type === 'weknora') {
+    const config = {
+      type: 'weknora',
+      api_key: m.api_key,
+      base_url: m.base_url,
+      user_prefix: m.user_prefix,
+      agent_id: m.agent_id,
+      agent_enabled: true,
+      web_search_enabled: !!m.web_search_enabled
     }
     return JSON.stringify(config, null, 2)
   }

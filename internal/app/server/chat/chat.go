@@ -12,7 +12,6 @@ import (
 	types_audio "xiaozhi-esp32-server-golang/internal/data/audio"
 	. "xiaozhi-esp32-server-golang/internal/data/client"
 	userconfig "xiaozhi-esp32-server-golang/internal/domain/config"
-	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
 	"xiaozhi-esp32-server-golang/internal/domain/openclaw"
 	log "xiaozhi-esp32-server-golang/logger"
 )
@@ -101,6 +100,7 @@ func GenClientState(pctx context.Context, deviceID string) (*ClientState, error)
 		Dialogue:          &Dialogue{},
 		Abort:             false,
 		ListenMode:        "auto",
+		ListenPhase:       ListenPhaseIdle,
 		DeviceID:          deviceID,
 		AgentID:           deviceConfig.AgentId,
 		Ctx:               ctx,
@@ -180,11 +180,11 @@ func (c *ChatManager) Start() error {
 	return nil
 }
 
-// 主动关闭断开连接
+// Close 关闭连接及关联会话资源
 func (c *ChatManager) Close() error {
 	c.closeOnce.Do(func() {
 		if c.clientState != nil {
-			log.Infof("主动关闭断开连接, 设备 %s", c.clientState.DeviceID)
+			log.Infof("关闭连接会话, 设备 %s", c.clientState.DeviceID)
 		}
 		// 先关闭会话级别的资源
 		if c.session != nil {
@@ -198,12 +198,8 @@ func (c *ChatManager) Close() error {
 }
 
 func (c *ChatManager) OnClose(deviceId string) {
-	log.Infof("设备 %s 断开连接", deviceId)
-	c.cancel()
-	if c.clientState != nil {
-		eventbus.Get().Publish(eventbus.TopicSessionEnd, c.clientState)
-	}
-	return
+	log.Infof("设备 %s 连接已断开，开始清理会话资源", deviceId)
+	_ = c.Close()
 }
 
 func (c *ChatManager) GetClientState() *ClientState {
