@@ -309,6 +309,14 @@ func (s *MqttUdpAdapter) processMessage() {
 			}
 
 			deviceSession := s.getDeviceSession(deviceId)
+			// 检查已有会话是否存活：checkClientActive 可能已经 Destroy 了旧连接，
+			// 但由于竞态条件尚未从 deviceId2Conn 中删除。此时旧连接的 context 已
+			// 取消，消息推入后无人消费，导致设备得不到响应。
+			if deviceSession != nil && !deviceSession.IsAlive() {
+				log.Infof("设备 %s 旧 MQTT 会话已失效，清理并重建", deviceId)
+				s.handleDisconnect(deviceId)
+				deviceSession = nil
+			}
 			if deviceSession == nil {
 				// 从UDP服务端获取会话信息
 				udpServer := s.getUdpServer()

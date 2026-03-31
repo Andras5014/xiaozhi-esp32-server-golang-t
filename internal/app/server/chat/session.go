@@ -231,6 +231,12 @@ func (s *ChatSession) Start(pctx context.Context) error {
 	go s.llmManager.Start(s.ctx) //处理 llm后 的一系列返回消息
 	go s.ttsManager.Start(s.ctx) //处理 tts的 消息队列
 
+	// MQTT 设备 hello 超时检测：如果设备连接后长时间未发送 hello，说明会话状态异常，
+	// 主动关闭会话以释放资源并让设备重连。
+	if s.serverTransport.GetTransportType() == types_conn.TransportTypeMqttUdp {
+		go s.monitorMqttHelloTimeout(s.ctx)
+	}
+
 	return nil
 }
 
@@ -610,6 +616,27 @@ func (s *ChatSession) HandleCommonHelloMessage(msg *ClientMessage) error {
 	return nil
 }
 
+const mqttHelloTimeout = 60 * time.Second
+
+// monitorMqttHelloTimeout 监控 MQTT 设备的 hello 超时。
+// 设备连接后应在短时间内发送 hello 完成握手；超时未收到说明设备状态异常（如空闲
+// 被清理后直接发了非 hello 消息触发新会话），主动关闭避免僵尸会话占用资源。
+func (s *ChatSession) monitorMqttHelloTimeout(ctx context.Context) {
+	timer := time.NewTimer(mqttHelloTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+		if !s.helloInited {
+			log.Warnf("设备 %s MQTT 会话 %ds 内未收到 hello，关闭会话",
+				s.clientState.DeviceID, int(mqttHelloTimeout.Seconds()))
+			s.Close()
+		}
+	}
+}
+
 func (s *ChatSession) resetOpenClawModeOnHello(agentIDs ...string) {
 	deviceID := strings.TrimSpace(s.clientState.DeviceID)
 	if deviceID == "" {
@@ -668,6 +695,17 @@ func (s *ChatSession) HandleWebsocketHelloMessage(msg *ClientMessage) error {
 
 // handleListenMessage 处理监听消息
 func (s *ChatSession) HandleListenMessage(msg *ClientMessage) error {
+	// MQTT 设备长时间空闲后服务端会话被 checkClientActive 清理，但设备端 MQTT 连接
+	// 仍在线（keepalive），唤醒时会跳过 hello 直接发 listen。此时新建的会话缺少
+	// hello 阶段的关键初始化（VAD/音频管道未启动），导致音频无法处理、设备得不到响应。
+	// 检测到此情况后关闭会话并发送 goodbye，强制设备重新走完整的 hello 握手流程。
+	if !s.helloInited && s.serverTransport.GetTransportType() == types_conn.TransportTypeMqttUdp {
+		log.Warnf("设备 %s 收到 listen（state=%s）但 hello 未初始化，关闭会话强制设备重连",
+			s.clientState.DeviceID, msg.State)
+		s.Close()
+		return nil
+	}
+
 	// 根据状态处理
 	switch msg.State {
 	case MessageStateStart:

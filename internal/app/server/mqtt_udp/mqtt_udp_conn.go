@@ -183,6 +183,17 @@ func (c *MqttUdpConn) IsActive() bool {
 	return time.Now().Unix()-c.lastActiveTs < MaxIdleDuration
 }
 
+// IsAlive 检查连接是否仍然存活（未被 Destroy）。
+// 用于在 processMessage 中检测 checkClientActive 已销毁但因竞态仍留在 map 中的连接。
+func (c *MqttUdpConn) IsAlive() bool {
+	select {
+	case <-c.ctx.Done():
+		return false
+	default:
+		return true
+	}
+}
+
 // 销毁
 func (c *MqttUdpConn) Destroy() {
 	c.cancel()
