@@ -289,9 +289,9 @@ func (a *App) OnNewConnection(transport types.IConn) {
 	// 检查是否已存在该设备的ChatManager
 	if existingManager, exists := a.chatManagers.Get(deviceID); exists {
 		log.Infof("设备 %s 已存在ChatManager，先关闭旧的连接", deviceID)
-		// 关闭旧的ChatManager
-		existingManager.Close()
-		go a.chatManagers.Remove(deviceID)
+
+		a.chatManagers.Remove(deviceID)
+		go existingManager.Close()
 	}
 
 	// 创建新的ChatManager
