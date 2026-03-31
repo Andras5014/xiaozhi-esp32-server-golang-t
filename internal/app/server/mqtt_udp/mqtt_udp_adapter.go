@@ -143,12 +143,28 @@ func (s *MqttUdpAdapter) connectAndRetry() {
 	opts.SetUsername(cfg.Username)
 	opts.SetPassword(cfg.Password)
 
+	// KeepAlive 心跳：客户端每 30s 发送 PINGREQ，broker 回复 PINGRESP。
+	// 若 PingTimeout(10s) 内无响应，paho 判定连接已死并触发 ConnectionLostHandler。
+	// 这是检测 NAT 网关静默丢弃 TCP 连接的关键机制。
+	opts.SetKeepAlive(30 * time.Second)
+	opts.SetPingTimeout(10 * time.Second)
+
+	// 启用自动重连：连接丢失后 paho 自动以指数退避重试（上限 60s），
+	// 重连成功后触发 OnConnectHandler 重新订阅 topic。
+	opts.SetAutoReconnect(true)
+	opts.SetMaxReconnectInterval(60 * time.Second)
+	opts.SetOrderMatters(false)
+
 	opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
-		Errorf("MQTT连接丢失: %v", err)
+		Errorf("MQTT连接丢失（将自动重连）: %v, Broker=%s:%d", err, cfg.Broker, cfg.Port)
+	})
+
+	opts.SetReconnectingHandler(func(client mqtt.Client, opts *mqtt.ClientOptions) {
+		Infof("MQTT正在重连 Broker=%s:%d ...", cfg.Broker, cfg.Port)
 	})
 
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		Info("MQTT已连接")
+		Infof("MQTT已连接, Broker=%s:%d", cfg.Broker, cfg.Port)
 		topic := ServerSubTopicPrefix
 		if token := client.Subscribe(topic, 0, s.handleMessage); token.Wait() && token.Error() != nil {
 			Errorf("订阅主题失败: %v", token.Error())
@@ -189,6 +205,11 @@ func (s *MqttUdpAdapter) checkClientActive() error {
 			case <-s.stopCtx.Done():
 				return
 			case <-ticker.C:
+				client := s.getClient()
+				if client != nil && !client.IsConnectionOpen() {
+					Warnf("MQTT连接健康检查: 连接不可用（可能已被 NAT 网关静默断开），等待自动重连...")
+				}
+
 				s.deviceId2Conn.Range(func(key, value interface{}) bool {
 					conn := value.(*MqttUdpConn)
 					if !conn.IsActive() {

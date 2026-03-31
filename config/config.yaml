@@ -52,9 +52,11 @@ websocket:
   port: 8989       # WebSocket监听端口
 
 # MQTT客户端配置（连接外部MQTT服务器）
+# 注意：若 mqtt_server 与本服务同进程运行，broker 必须配置为 127.0.0.1（不要用公网IP），
+# 否则在云服务器上走 NAT 网关，空闲时 TCP 连接会被静默丢弃导致消息中断。
 mqtt:
   enable: true                # 是否启用MQTT客户端, 当此值为false时会同时关闭udp服务器
-  broker: "127.0.0.1"         # MQTT代理服务器地址
+  broker: "127.0.0.1"         # MQTT代理服务器地址（同进程时必须用 127.0.0.1）
   type: "tcp"                 # 连接类型
   port: 2883                  # MQTT端口
   client_id: "xiaozhi_server" # 客户端ID
