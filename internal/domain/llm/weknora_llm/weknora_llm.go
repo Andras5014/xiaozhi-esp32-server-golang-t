@@ -272,7 +272,7 @@ func (p *WeknoraLLMProvider) ResponseWithContext(ctx context.Context, sessionID 
 						Content: content,
 					}
 				}
-				if streamEvent.Done {
+				if shouldTerminateStreamEvent(streamEvent) {
 					log.Debugf("weknora stream completed after %d events", eventCount)
 					return
 				}
@@ -280,9 +280,8 @@ func (p *WeknoraLLMProvider) ResponseWithContext(ctx context.Context, sessionID 
 				log.Debugf("weknora stream completed (explicit) after %d events", eventCount)
 				return
 			default:
-				if streamEvent.Done && streamEvent.ResponseType != "agent_query" {
-					log.Debugf("weknora stream event type=%s signaled done after %d events", streamEvent.ResponseType, eventCount)
-					return
+				if streamEvent.Done {
+					log.Debugf("weknora stream auxiliary event type=%s done=%v ignored after %d events", streamEvent.ResponseType, streamEvent.Done, eventCount)
 				}
 			}
 		}
@@ -449,7 +448,21 @@ var thinkTagRegexp = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
 func stripThinkTags(text string) string {
 	result := thinkTagRegexp.ReplaceAllString(text, "")
-	return strings.TrimSpace(result)
+	if strings.TrimSpace(result) == "" {
+		return ""
+	}
+	return strings.Trim(result, "\r\n\t")
+}
+
+func shouldTerminateStreamEvent(event weknoraStreamEvent) bool {
+	switch event.ResponseType {
+	case "answer":
+		return event.Done
+	case "complete":
+		return true
+	default:
+		return false
+	}
 }
 
 func sendLLMError(ch chan *schema.Message, err error) {
