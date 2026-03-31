@@ -367,8 +367,15 @@ func (s *MqttUdpAdapter) processMessage() {
 				//保存至deviceId2UdpSession
 				s.SetDeviceSession(deviceId, deviceSession)
 
-				deviceSession.OnClose(s.handleDisconnect)
-
+				thisConn := deviceSession
+				deviceSession.OnClose(func(dId string) {
+					currentConn := s.getDeviceSession(dId)
+					if currentConn != nil && currentConn != thisConn {
+						log.Infof("设备 %s 旧连接关闭，但已有新连接替代，跳过清理", dId)
+						return
+					}
+					s.handleDisconnect(dId)
+				})
 				s.onNewConnection(deviceSession)
 			}
 

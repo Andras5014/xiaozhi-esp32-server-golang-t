@@ -37,8 +37,8 @@ type MqttUdpConn struct {
 	data sync.Map
 
 	onCloseCbList []func(deviceId string)
-
-	lastActiveTs int64 //上下行 信令和音频数据 都会更新
+	destroyOnce   sync.Once
+	lastActiveTs  int64 //上下行 信令和音频数据 都会更新
 }
 
 // NewMqttUdpConn 创建一个新的 MqttUdpConn 实例
@@ -194,12 +194,14 @@ func (c *MqttUdpConn) IsAlive() bool {
 	}
 }
 
-// 销毁
+// 销毁（sync.Once 保证只执行一次，避免重复触发 onClose 回调）
 func (c *MqttUdpConn) Destroy() {
-	c.cancel()
-	for _, cb := range c.onCloseCbList {
-		cb(c.DeviceId)
-	}
+	c.destroyOnce.Do(func() {
+		c.cancel()
+		for _, cb := range c.onCloseCbList {
+			cb(c.DeviceId)
+		}
+	})
 }
 
 func (c *MqttUdpConn) CloseAudioChannel() error {
