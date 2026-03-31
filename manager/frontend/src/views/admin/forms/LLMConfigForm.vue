@@ -319,10 +319,7 @@ watch(
       props.model.provider = "weknora";
 
       props.model.base_url = quickUrls[value] || "";
-
-      if (!props.model.model_name) {
-        props.model.model_name = "weknora";
-      }
+      props.model.model_name = "weknora";
     }
   },
 );
