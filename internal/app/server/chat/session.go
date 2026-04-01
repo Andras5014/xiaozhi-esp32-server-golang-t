@@ -1002,7 +1002,11 @@ func (s *ChatSession) HandleAbortMessage(msg *ClientMessage) error {
 	// 设置打断状态
 	s.clientState.Abort = true
 
-	s.StopSpeaking(true)
+	if s.clientState.IsRealTime() {
+		s.StopSpeakingAfterAsr(true)
+	} else {
+		s.StopSpeaking(true)
+	}
 
 	// 记录日志
 	log.Infof("设备 %s abort 会话", msg.DeviceID)
