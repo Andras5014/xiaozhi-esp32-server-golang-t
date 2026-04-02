@@ -244,7 +244,7 @@
                 @click="$router.push('/admin/llm-config')"
               >
                 <el-icon><Setting /></el-icon>
-                LLM配置
+                智能体配置
               </el-button>
               <el-button
                 type="warning"

@@ -1,7 +1,7 @@
 <template>
   <div class="admin-config">
     <div class="page-header">
-      <h2>LLM配置管理</h2>
+      <h2>智能体配置管理</h2>
     </div>
 
     <el-card class="main-card" shadow="hover">
@@ -16,7 +16,15 @@
           >
             测试全部
           </el-button>
-          <el-button type="primary" @click="showDialog = true">
+          <el-button
+            type="primary"
+            @click="
+              () => {
+                resetForm();
+                showDialog = true;
+              }
+            "
+          >
             <el-icon><Plus /></el-icon>
             添加配置
           </el-button>
@@ -122,11 +130,16 @@
     <!-- 添加/编辑配置弹窗 -->
     <el-dialog
       v-model="showDialog"
-      :title="editingConfig ? '编辑LLM配置' : '添加LLM配置'"
+      :title="editingConfig ? '编辑配置' : '添加配置'"
       width="600px"
       @close="handleDialogClose"
     >
-      <LLMConfigForm ref="formRef" :model="form" :rules="rules" />
+      <LLMConfigForm
+        ref="formRef"
+        :model="form"
+        :rules="rules"
+        :visible="showDialog"
+      />
 
       <template #footer>
         <el-button @click="handleDialogClose">取消</el-button>
@@ -172,13 +185,13 @@ const formRef = ref();
 const form = reactive({
   name: "",
   config_id: "",
-  provider: "",
+  provider: "weknora",
   is_default: false,
   enabled: true,
-  type: "openai",
-  model_name: "gpt-3.5-turbo",
+  type: "weknora",
+  model_name: "",
   api_key: "",
-  base_url: "https://api.openai.com/v1",
+  base_url: "",
   max_tokens: 4000,
   temperature: 0.7,
   top_p: 0.9,
@@ -316,6 +329,8 @@ const editConfig = (config) => {
     form.bot_id = configObj.bot_id || "";
     form.user_prefix = configObj.user_prefix || "";
     form.connector_id = configObj.connector_id || "1024";
+    form.web_search_enabled = configObj.web_search_enabled || false;
+    form.agent_id = configObj.agent_id || "";
   } catch (error) {
     console.error("解析配置JSON失败:", error);
   }
@@ -533,13 +548,13 @@ const resetForm = () => {
   editingConfig.value = null;
   form.name = "";
   form.config_id = "";
-  form.provider = "";
+  form.provider = "weknora";
   form.is_default = false;
   form.enabled = true;
-  form.type = "openai";
-  form.model_name = "gpt-3.5-turbo";
+  form.type = "weknora";
+  form.model_name = "";
   form.api_key = "";
-  form.base_url = "https://api.openai.com/v1";
+  form.base_url = "";
   form.max_tokens = 4000;
   form.temperature = 0.7;
   form.top_p = 0.9;
@@ -634,5 +649,4 @@ onMounted(() => {
 :deep(.el-table .el-table__row) {
   height: 60px;
 }
-
 </style>

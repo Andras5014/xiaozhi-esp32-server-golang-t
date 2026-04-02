@@ -64,7 +64,7 @@
       :title="editing ? '编辑配置' : '新增配置'"
       width="700px"
     >
-      <el-form :model="form" label-width="100px">
+      <el-form :model="form" label-width="130px">
         <el-form-item label="提供商">
           <el-select
             v-model="form.provider"
