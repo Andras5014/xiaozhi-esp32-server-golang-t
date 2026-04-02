@@ -1,7 +1,7 @@
 <template>
   <!-- 桌面端布局：使用Element Plus -->
   <el-container v-if="!isMobileDevice" class="layout-container">
-    <el-aside width="250px" class="sidebar">
+    <el-aside width="240px" class="sidebar">
       <div class="logo">
         <h3>布法罗智能体管理系统</h3>
       </div>
@@ -82,13 +82,13 @@
           </template>
           <el-menu-item index="/admin/vad-config">VAD配置</el-menu-item>
           <el-menu-item index="/admin/asr-config">ASR配置</el-menu-item>
-          <el-menu-item index="/admin/llm-config">LLM配置</el-menu-item>
           <el-menu-item index="/admin/tts-config">TTS配置</el-menu-item>
-          <el-menu-item index="/admin/vision-config">Vision配置</el-menu-item>
-          <el-menu-item index="/admin/memory-config">Memory配置</el-menu-item>
-          <el-menu-item index="/admin/knowledge-search-config"
-            >知识库检索配置</el-menu-item
-          >
+          <el-menu-item index="/admin/llm-config">智能体配置</el-menu-item>
+          <!-- <el-menu-item index="/admin/vision-config">Vision配置</el-menu-item> -->
+          <!-- <el-menu-item index="/admin/memory-config">Memory配置</el-menu-item> -->
+          <!-- <el-menu-item index="/admin/knowledge-search-config">
+            知识库检索配置
+          </el-menu-item> -->
         </el-sub-menu>
 
         <el-menu-item v-if="authStore.isAdmin" index="/voice-clones">
@@ -277,7 +277,7 @@ const handleCommand = async (command) => {
 
 .logo h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
 }
 
 .sidebar-menu {
@@ -285,6 +285,25 @@ const handleCommand = async (command) => {
   height: calc(100vh - 60px);
   overflow-y: auto;
   padding: 6px 0;
+}
+
+/* 侧边栏菜单 Hover/Active 背景色及圆角 */
+:deep(.sidebar-menu .el-menu-item),
+:deep(.sidebar-menu .el-sub-menu__title) {
+  margin: 4px 8px !important;
+  border-radius: 8px !important;
+  height: 46px !important;
+  line-height: 46px !important;
+}
+
+:deep(.sidebar-menu .el-menu-item:hover),
+:deep(.sidebar-menu .el-sub-menu__title:hover) {
+  background-color: #242c42 !important;
+}
+
+:deep(.sidebar-menu .el-menu-item.is-active),
+:deep(.sidebar-menu .el-sub-menu .el-menu-item.is-active) {
+  background-color: #242c42 !important;
 }
 
 /* 侧边栏滚动条美化 */
@@ -363,8 +382,8 @@ const handleCommand = async (command) => {
 }
 
 .user-avatar {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
 }
 
