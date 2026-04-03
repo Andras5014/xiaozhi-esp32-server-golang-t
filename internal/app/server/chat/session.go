@@ -1351,40 +1351,46 @@ func (s *ChatSession) ClearChatTextQueue() {
 
 // DoExitChat 执行退出聊天逻辑（发送再见语并关闭会话）
 func (s *ChatSession) DoExitChat() {
-	// 友好的再见语
 	goodbyeText := "好的，再见！期待下次与您聊天～"
 
-	// 保存一条 assistant 角色的消息
 	goodbyeMsg := schema.AssistantMessage(goodbyeText, nil)
 	if err := s.llmManager.AddLlmMessage(s.clientState.Ctx, goodbyeMsg); err != nil {
 		log.Errorf("保存再见消息失败: %v", err)
 	}
 
-	// 获取 context
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
 	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
 
-	// 发送 TTS 再见语
 	s.ttsManager.EnqueueTtsStart(ctx)
 
 	err := s.ttsManager.handleTextResponse(ctx, llm_common.LLMResponseStruct{
 		Text:    goodbyeText,
 		IsStart: true,
 		IsEnd:   true,
-	}, true) // 同步处理，等待TTS完成
+	}, true)
 
 	if err != nil {
 		log.Errorf("发送再见语失败: %v", err)
+		s.Close()
+		return
 	}
 
 	s.ttsManager.EnqueueTtsStop(ctx)
-	// 关闭会话
+
+	// handleTextResponse(sync=true) 只保证 TTS 音频已生成并入队到 sessionAudioQueue，
+	// 但 runSenderLoop 尚未将所有帧发送到设备。必须等待足够时间让 runSenderLoop
+	// 完成音频发送和 TtsStop 处理，否则 Close() 会立即取消上下文导致
+	// runSenderLoop 退出、设备收不到完整再见语而卡在聆听状态。
+	select {
+	case <-s.ctx.Done():
+	case <-time.After(8 * time.Second):
+	}
+
 	s.Close()
 }
 
 func (s *ChatSession) Close() {
 	s.closeOnce.Do(func() {
-		// 清理ASR资源（资源管理在 ASRManager 内部）
 		if s.asrManager != nil {
 			s.asrManager.Cleanup()
 		}
@@ -1394,22 +1400,23 @@ func (s *ChatSession) Close() {
 		}
 		log.Debugf("ChatSession.Close() 开始清理会话资源, 设备 %s", deviceID)
 
-		// 取消会话级别的上下文
-		if s.cancel != nil {
-			s.cancel()
-		}
 		s.finishOpenClawWarmup("", false)
-
-		// 清理聊天文本队列
 		s.ClearChatTextQueue()
 		s.clearOpenClawStreams()
 
-		// 停止说话和清理音频相关资源
+		// 先发送 TtsStop 和 MqttGoodbye，再取消根上下文。
+		// 否则 s.cancel() 会导致 runSenderLoop 立即退出，
+		// 设备可能收不到 TtsStop/MqttGoodbye 而卡在聆听状态。
 		s.StopSpeaking(true)
 
-		// 关闭服务端传输
 		if s.serverTransport != nil {
 			s.serverTransport.Close()
+		}
+
+		// 在 TtsStop 和 MqttGoodbye 发送完成后再取消上下文，
+		// 让 runSenderLoop 等后台协程有序退出。
+		if s.cancel != nil {
+			s.cancel()
 		}
 
 		if s.speakerManager != nil {
