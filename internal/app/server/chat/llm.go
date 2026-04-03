@@ -1179,6 +1179,8 @@ func (l *LLMManager) GetMessages(ctx context.Context, userMessage *schema.Messag
 	now := time.Now()
 	systemPrompt += fmt.Sprintf("\n当前时间和日期: %s %s", now.Format("2006年01月02日 15:04:05"), now.Format("Monday"))
 
+	systemPrompt += "\n注意：当用户表达想要结束对话、告别、要求你停止说话、表示不想继续聊天时，你必须调用 exit_conversation 工具来结束会话，而不是仅仅用语言回复。"
+
 	if memoryMode == MemoryModeLong && l.clientState.MemoryContext != "" {
 		systemPrompt += fmt.Sprintf("\n用户个性化信息: \n%s", l.clientState.MemoryContext)
 	}

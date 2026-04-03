@@ -875,9 +875,14 @@ func (s *ChatSession) HandleWelcome() {
 }
 
 func (a *ChatSession) checkExitWords(text string) bool {
-	exitWords := []string{"再见", "退下吧", "退出", "退出对话"}
+	normalized := removePunctuation(text)
+	exitWords := []string{
+		"再见", "拜拜", "退下吧", "退出", "退出对话",
+		"停止对话", "别说了", "不说了", "结束对话",
+		"不聊了", "拜了个拜",
+	}
 	for _, word := range exitWords {
-		if strings.Contains(text, word) {
+		if strings.Contains(normalized, word) {
 			return true
 		}
 	}
