@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	types_audio "xiaozhi-esp32-server-golang/internal/data/audio"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -637,6 +638,24 @@ func (s *ChatSession) monitorMqttHelloTimeout(ctx context.Context) {
 	}
 }
 
+// autoHelloForMqtt 在 MQTT 设备跳过 hello 直接发送 listen 时，
+// 使用默认音频参数自动完成 hello 握手流程，使设备无需重连即可恢复工作。
+// 典型场景：设备空闲超时被服务端清理，但 MQTT keepalive 保持连接，唤醒后直接发 listen。
+func (s *ChatSession) autoHelloForMqtt() error {
+	syntheticMsg := &ClientMessage{
+		Type:      MessageTypeHello,
+		DeviceID:  s.clientState.DeviceID,
+		Transport: types_conn.TransportTypeMqttUdp,
+		AudioParams: &types_audio.AudioFormat{
+			Format:        types_audio.Format,
+			SampleRate:    types_audio.SampleRate,
+			Channels:      types_audio.Channels,
+			FrameDuration: types_audio.FrameDuration,
+		},
+	}
+	return s.HandleMqttHelloMessage(syntheticMsg)
+}
+
 func (s *ChatSession) resetOpenClawModeOnHello(agentIDs ...string) {
 	deviceID := strings.TrimSpace(s.clientState.DeviceID)
 	if deviceID == "" {
@@ -698,12 +717,16 @@ func (s *ChatSession) HandleListenMessage(msg *ClientMessage) error {
 	// MQTT 设备长时间空闲后服务端会话被 checkClientActive 清理，但设备端 MQTT 连接
 	// 仍在线（keepalive），唤醒时会跳过 hello 直接发 listen。此时新建的会话缺少
 	// hello 阶段的关键初始化（VAD/音频管道未启动），导致音频无法处理、设备得不到响应。
-	// 检测到此情况后关闭会话并发送 goodbye，强制设备重新走完整的 hello 握手流程。
+	// 使用默认音频参数自动完成 hello 握手，让设备无需重连即可恢复工作。
 	if !s.helloInited && s.serverTransport.GetTransportType() == types_conn.TransportTypeMqttUdp {
-		log.Warnf("设备 %s 收到 listen（state=%s）但 hello 未初始化，关闭会话强制设备重连",
+		log.Warnf("设备 %s 收到 listen（state=%s）但 hello 未初始化，自动执行 hello 握手",
 			s.clientState.DeviceID, msg.State)
-		s.Close()
-		return nil
+		if err := s.autoHelloForMqtt(); err != nil {
+			log.Errorf("设备 %s 自动 hello 失败: %v，关闭会话", s.clientState.DeviceID, err)
+			s.Close()
+			return nil
+		}
+		log.Infof("设备 %s 自动 hello 初始化成功，继续处理 listen 消息", s.clientState.DeviceID)
 	}
 
 	// 根据状态处理
