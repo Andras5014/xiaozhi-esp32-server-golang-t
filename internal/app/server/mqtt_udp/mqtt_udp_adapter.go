@@ -338,6 +338,13 @@ func (s *MqttUdpAdapter) processMessage() {
 				s.handleDisconnect(deviceId)
 				deviceSession = nil
 			}
+			// goodbye 表示设备主动断开，无需为其创建新会话。
+			// 典型场景：服务端空闲超时清理会话后发送 goodbye，设备回复 goodbye，
+			// 此时不应该创建新的 ChatManager，否则会产生无用的僵尸会话。
+			if deviceSession == nil && clientMsg.Type == "goodbye" {
+				log.Infof("设备 %s 无会话时收到 goodbye，忽略", deviceId)
+				continue
+			}
 			if deviceSession == nil {
 				// 从UDP服务端获取会话信息
 				udpServer := s.getUdpServer()
