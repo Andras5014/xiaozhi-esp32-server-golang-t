@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	log "xiaozhi-esp32-server-golang/logger"
@@ -50,4 +51,14 @@ func (s *ChatSession) stopSpeaking(cancelSession bool, isSendTtsStop bool) {
 
 func (s *ChatSession) MqttClose() {
 	s.serverTransport.SendMqttGoodbye()
+}
+func isExpectedCancellationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "context canceled") || strings.Contains(errMsg, "上下文已取消")
 }
