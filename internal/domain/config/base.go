@@ -21,6 +21,7 @@ func GetProvider(sType string) (UserConfigProvider, error) {
 		backendUrl := util.GetBackendURL()
 		config = map[string]interface{}{
 			"backend_url": backendUrl,
+			"auth_token":  util.GetManagerAuthToken(),
 		}
 	}
 

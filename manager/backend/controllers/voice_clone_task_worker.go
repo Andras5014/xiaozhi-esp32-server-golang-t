@@ -98,6 +98,8 @@ func (vcc *VoiceCloneController) processVoiceCloneTask(taskPrimaryID uint) {
 	provider := normalizeCloneProvider(strings.TrimSpace(ttsCfg.Provider))
 	var result *minimaxVoiceCloneResult
 	switch provider {
+	case "doubao":
+		result, err = vcc.cloneWithDoubao(ctx, ttsCfg, clone.TTSConfigID, audio.FilePath, audio.FileName, audio.Transcript)
 	case "minimax":
 		result, err = vcc.cloneWithMinimax(ctx, ttsCfg, clone.TTSConfigID, audio.FilePath, audio.FileName, audio.Transcript)
 	case "cosyvoice":

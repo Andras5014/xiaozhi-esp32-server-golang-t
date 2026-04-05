@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"xiaozhi-esp32-server-golang/internal/domain/mcp"
+	"xiaozhi-esp32-server-golang/internal/util"
 	log "xiaozhi-esp32-server-golang/logger"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -81,7 +82,7 @@ func (s *WebSocketServer) parseMCPToken(tokenString string) (*MCPClaims, error) 
 	}
 
 	// 使用与生成token相同的密钥
-	jwtSecret := []byte("xiaozhi_admin_secret_key")
+	jwtSecret := []byte(util.GetManagerEndpointAuthToken())
 
 	token, err := jwt.ParseWithClaims(tokenString, &MCPClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return jwtSecret, nil

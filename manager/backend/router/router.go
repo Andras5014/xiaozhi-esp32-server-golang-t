@@ -15,6 +15,8 @@ import (
 
 func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	r := gin.Default()
+	internalAuthToken := config.ResolveInternalAuthToken(cfg)
+	endpointAuthToken := config.ResolveEndpointAuthToken(cfg)
 
 	// CORS配置
 	corsConfig := cors.DefaultConfig()
@@ -25,9 +27,19 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 
 	// 初始化控制器
 	authController := &controllers.AuthController{DB: db}
-	webSocketController := controllers.NewWebSocketController(db)
-	adminController := &controllers.AdminController{DB: db, WebSocketController: webSocketController}
-	userController := &controllers.UserController{DB: db, WebSocketController: webSocketController}
+	webSocketController := controllers.NewWebSocketController(db, endpointAuthToken)
+	adminController := &controllers.AdminController{
+		DB:                  db,
+		WebSocketController: webSocketController,
+		InternalAuthToken:   internalAuthToken,
+		EndpointAuthToken:   endpointAuthToken,
+	}
+	userController := &controllers.UserController{
+		DB:                  db,
+		WebSocketController: webSocketController,
+		InternalAuthToken:   internalAuthToken,
+		EndpointAuthToken:   endpointAuthToken,
+	}
 	deviceActivationController := &controllers.DeviceActivationController{DB: db}
 	setupController := &controllers.SetupController{DB: db}
 	speakerGroupController := controllers.NewSpeakerGroupController(db, cfg)
@@ -60,20 +72,23 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		api.GET("/setup/status", setupController.CheckSetupStatus)
 		api.POST("/setup/initialize", setupController.InitializeDatabase)
 
-		// 设备激活相关公开接口（无需认证）
-		api.GET("/public/device/check-activation", deviceActivationController.CheckDeviceActivation)
-		api.GET("/public/device/activation-info", deviceActivationController.GetActivationInfo)
-		api.POST("/public/device/activate", deviceActivationController.ActivateDevice)
+		// 内部服务接口（服务间 Token 认证）
+		internal := api.Group("")
+		internal.Use(middleware.InternalServiceAuth(internalAuthToken))
+		{
+			internal.GET("/internal/device/check-activation", deviceActivationController.CheckDeviceActivation)
+			internal.GET("/internal/device/activation-info", deviceActivationController.GetActivationInfo)
+			internal.POST("/internal/device/activate", deviceActivationController.ActivateDevice)
 
-		// 内部服务接口（无需认证）
-		api.GET("/configs", adminController.GetDeviceConfigs)
-		api.GET("/system/configs", adminController.GetSystemConfigs)
-		api.POST("/internal/history/messages", chatHistoryController.SaveMessage)                         // 保存消息（内部服务接口）
-		api.PUT("/internal/history/messages/:message_id/audio", chatHistoryController.UpdateMessageAudio) // 更新消息音频（内部服务接口）
-		api.GET("/internal/history/messages", chatHistoryController.GetMessagesForInit)                   // 获取消息（用于初始化加载，内部服务接口）
-		api.POST("/internal/pool/stats", poolStatsController.ReportPoolStats)                             // 上报资源池统计数据（内部服务接口）
-		api.POST("/internal/devices/:device_name/switch-role", adminController.SwitchDeviceRoleByNameInternal)
-		api.POST("/internal/devices/:device_name/restore-default-role", adminController.RestoreDeviceDefaultRoleInternal)
+			internal.GET("/configs", adminController.GetDeviceConfigs)
+			internal.GET("/system/configs", adminController.GetSystemConfigs)
+			internal.POST("/internal/history/messages", chatHistoryController.SaveMessage)                         // 保存消息（内部服务接口）
+			internal.PUT("/internal/history/messages/:message_id/audio", chatHistoryController.UpdateMessageAudio) // 更新消息音频（内部服务接口）
+			internal.GET("/internal/history/messages", chatHistoryController.GetMessagesForInit)                   // 获取消息（用于初始化加载，内部服务接口）
+			internal.POST("/internal/pool/stats", poolStatsController.ReportPoolStats)                             // 上报资源池统计数据（内部服务接口）
+			internal.POST("/internal/devices/:device_name/switch-role", adminController.SwitchDeviceRoleByNameInternal)
+			internal.POST("/internal/devices/:device_name/restore-default-role", adminController.RestoreDeviceDefaultRoleInternal)
+		}
 
 		// 需要认证的路由
 		auth := api.Group("")

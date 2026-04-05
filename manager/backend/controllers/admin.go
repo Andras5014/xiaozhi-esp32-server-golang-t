@@ -56,6 +56,8 @@ func normalizeAgentMemoryMode(mode string) string {
 type AdminController struct {
 	DB                  *gorm.DB
 	WebSocketController *WebSocketController
+	InternalAuthToken   string
+	EndpointAuthToken   string
 }
 
 // 通用配置管理
@@ -156,53 +158,76 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 		response.OpenClaw = buildOpenClawConfigFromAgent(agent)
 	}
 
-	cloneVoiceCache := make(map[string]bool)
-	hasAliyunQwenCloneVoice := func(ttsConfigID string, voice *string) bool {
+	cloneVoiceModelCache := make(map[string]string)
+	resolveCloneVoiceModelOverride := func(provider, ttsConfigID string, voice *string) *string {
 		if device.ID == 0 || device.UserID == 0 {
-			return false
+			return nil
 		}
+		provider = normalizeCloneProvider(provider)
 		if strings.TrimSpace(ttsConfigID) == "" || voice == nil || strings.TrimSpace(*voice) == "" {
-			return false
+			return nil
 		}
-		voiceID := strings.TrimSpace(*voice)
-		cacheKey := ttsConfigID + "||" + voiceID
-		if cached, exists := cloneVoiceCache[cacheKey]; exists {
-			return cached
+		if provider != "aliyun_qwen" && provider != "doubao" {
+			return nil
 		}
 
-		var count int64
-		err := ac.DB.Model(&models.VoiceClone{}).
-			Where("user_id = ? AND provider = ? AND tts_config_id = ? AND provider_voice_id = ? AND status = ?",
-				device.UserID, "aliyun_qwen", ttsConfigID, voiceID, voiceCloneStatusActive).
-			Count(&count).Error
-		if err != nil {
-			log.Printf("检测千问复刻音色失败: user_id=%d tts_config_id=%s voice_id=%s err=%v", device.UserID, ttsConfigID, voiceID, err)
-			cloneVoiceCache[cacheKey] = false
-			return false
+		voiceID := strings.TrimSpace(*voice)
+		cacheKey := provider + "||" + ttsConfigID + "||" + voiceID
+		if cached, exists := cloneVoiceModelCache[cacheKey]; exists {
+			if cached == "" {
+				return nil
+			}
+			model := cached
+			return &model
 		}
-		cloneVoiceCache[cacheKey] = count > 0
-		return cloneVoiceCache[cacheKey]
+
+		query := ac.DB.Model(&models.VoiceClone{}).
+			Where("user_id = ? AND tts_config_id = ? AND provider_voice_id = ? AND status = ?",
+				device.UserID, ttsConfigID, voiceID, voiceCloneStatusActive)
+		if provider == "doubao" {
+			query = query.Where("provider IN ?", []string{"doubao", "doubao_ws"})
+		} else {
+			query = query.Where("provider = ?", provider)
+		}
+
+		var clone models.VoiceClone
+		err := query.Order("updated_at DESC, created_at DESC").First(&clone).Error
+		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				log.Printf("检测复刻音色模型覆盖失败: provider=%s user_id=%d tts_config_id=%s voice_id=%s err=%v", provider, device.UserID, ttsConfigID, voiceID, err)
+			}
+			cloneVoiceModelCache[cacheKey] = ""
+			return nil
+		}
+
+		targetModel := strings.TrimSpace(getTargetModelFromCloneMeta(clone.MetaJSON))
+		if targetModel == "" {
+			switch provider {
+			case "aliyun_qwen":
+				targetModel = defaultAliyunQwenCloneTargetModel
+			case "doubao":
+				targetModel = resolveDoubaoModelSelection("", voiceID).ConfigModel
+			}
+		}
+		cloneVoiceModelCache[cacheKey] = targetModel
+		if targetModel == "" {
+			return nil
+		}
+		return &targetModel
 	}
-	applyAliyunQwenCloneModel := func(provider, ttsConfigID string, voice *string, ttsConfigData map[string]interface{}) {
+	applyCloneVoiceModel := func(provider, ttsConfigID string, voice *string, ttsConfigData map[string]interface{}) {
 		if ttsConfigData == nil {
 			return
 		}
-		if normalizeCloneProvider(provider) != "aliyun_qwen" {
-			return
-		}
-		if hasAliyunQwenCloneVoice(ttsConfigID, voice) {
-			ttsConfigData["model"] = defaultAliyunQwenCloneTargetModel
+		if override := resolveCloneVoiceModelOverride(provider, ttsConfigID, voice); override != nil && strings.TrimSpace(*override) != "" {
+			ttsConfigData["model"] = strings.TrimSpace(*override)
 		}
 	}
-	buildAliyunQwenVoiceModelOverride := func(ttsConfigID *string, voice *string) *string {
+	buildVoiceModelOverride := func(provider string, ttsConfigID *string, voice *string) *string {
 		if ttsConfigID == nil {
 			return nil
 		}
-		if hasAliyunQwenCloneVoice(strings.TrimSpace(*ttsConfigID), voice) {
-			model := defaultAliyunQwenCloneTargetModel
-			return &model
-		}
-		return nil
+		return resolveCloneVoiceModelOverride(provider, strings.TrimSpace(*ttsConfigID), voice)
 	}
 
 	// ==================== 配置获取逻辑（带优先级） ====================
@@ -251,7 +276,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 					} else {
 						ttsConfigData["voice"] = *role.Voice
 					}
-					applyAliyunQwenCloneModel(response.TTS.Provider, response.TTS.ConfigID, role.Voice, ttsConfigData)
+					applyCloneVoiceModel(response.TTS.Provider, response.TTS.ConfigID, role.Voice, ttsConfigData)
 					if updatedJsonData, err := json.Marshal(ttsConfigData); err == nil {
 						response.TTS.JsonData = string(updatedJsonData)
 					}
@@ -299,7 +324,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 				} else {
 					ttsConfigData["voice"] = *agent.Voice
 				}
-				applyAliyunQwenCloneModel(response.TTS.Provider, response.TTS.ConfigID, agent.Voice, ttsConfigData)
+				applyCloneVoiceModel(response.TTS.Provider, response.TTS.ConfigID, agent.Voice, ttsConfigData)
 				if updatedJsonData, err := json.Marshal(ttsConfigData); err == nil {
 					response.TTS.JsonData = string(updatedJsonData)
 				}
@@ -346,7 +371,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 					} else {
 						ttsConfigData["voice"] = *defaultRole.Voice
 					}
-					applyAliyunQwenCloneModel(response.TTS.Provider, response.TTS.ConfigID, defaultRole.Voice, ttsConfigData)
+					applyCloneVoiceModel(response.TTS.Provider, response.TTS.ConfigID, defaultRole.Voice, ttsConfigData)
 					if updatedJsonData, err := json.Marshal(ttsConfigData); err == nil {
 						response.TTS.JsonData = string(updatedJsonData)
 					}
@@ -455,7 +480,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 					Uuids:              uuids,
 					TTSConfigID:        speakerGroup.TTSConfigID,
 					Voice:              speakerGroup.Voice,
-					VoiceModelOverride: buildAliyunQwenVoiceModelOverride(speakerGroup.TTSConfigID, speakerGroup.Voice),
+					VoiceModelOverride: buildVoiceModelOverride(response.TTS.Provider, speakerGroup.TTSConfigID, speakerGroup.Voice),
 				}
 			}
 		}
@@ -966,6 +991,7 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 
 				// 组装成与 config.yaml 相同的格式
 				configItem := gin.H{
+					"provider":   config.Provider,
 					"name":       config.Name,
 					"is_default": config.IsDefault,
 				}
@@ -2906,7 +2932,7 @@ func (ac *AdminController) GetAgentMCPEndpoint(c *gin.Context) {
 	}
 
 	// 使用公共函数生成MCP接入点
-	endpoint, err := GenerateAgentMCPEndpoint(ac.DB, agentID, userID)
+	endpoint, err := GenerateAgentMCPEndpoint(ac.DB, agentID, userID, ac.EndpointAuthToken)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -2936,7 +2962,7 @@ func (ac *AdminController) GetAgentOpenClawEndpoint(c *gin.Context) {
 		return
 	}
 
-	endpoint, err := GenerateAgentOpenClawEndpoint(ac.DB, agentID, userID)
+	endpoint, err := GenerateAgentOpenClawEndpoint(ac.DB, agentID, userID, ac.EndpointAuthToken)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -4733,7 +4759,7 @@ func (ac *AdminController) DeleteMCPConfig(c *gin.Context) {
 }
 
 // GenerateAgentMCPEndpoint 公共的MCP接入点生成函数
-func GenerateAgentMCPEndpoint(db *gorm.DB, agentID string, userID uint) (string, error) {
+func GenerateAgentMCPEndpoint(db *gorm.DB, agentID string, userID uint, endpointAuthToken string) (string, error) {
 	// 获取OTA配置中的外网WebSocket URL
 	var otaConfig models.Config
 	if err := db.Where("type = ? AND is_default = ?", "ota", true).First(&otaConfig).Error; err != nil {
@@ -4771,7 +4797,7 @@ func GenerateAgentMCPEndpoint(db *gorm.DB, agentID string, userID uint) (string,
 	baseURL := fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
 
 	// 生成MCP JWT token
-	token, err := generateMCPToken(agentID, userID)
+	token, err := generateMCPToken(agentID, userID, endpointAuthToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate MCP token: %v", err)
 	}
@@ -4783,7 +4809,7 @@ func GenerateAgentMCPEndpoint(db *gorm.DB, agentID string, userID uint) (string,
 }
 
 // GenerateAgentOpenClawEndpoint 公共的OpenClaw接入点生成函数
-func GenerateAgentOpenClawEndpoint(db *gorm.DB, agentID string, userID uint) (string, error) {
+func GenerateAgentOpenClawEndpoint(db *gorm.DB, agentID string, userID uint, endpointAuthToken string) (string, error) {
 	var otaConfig models.Config
 	if err := db.Where("type = ? AND is_default = ?", "ota", true).First(&otaConfig).Error; err != nil {
 		return "", fmt.Errorf("failed to get OTA config: %v", err)
@@ -4816,7 +4842,7 @@ func GenerateAgentOpenClawEndpoint(db *gorm.DB, agentID string, userID uint) (st
 
 	baseURL := fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
 
-	token, err := generateOpenClawToken(agentID, userID)
+	token, err := generateOpenClawToken(agentID, userID, endpointAuthToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate OpenClaw token: %v", err)
 	}
@@ -4938,7 +4964,7 @@ func (ac *AdminController) SetDefaultMemoryConfig(c *gin.Context) {
 }
 
 // generateMCPToken 生成稳定的MCP JWT Token（同一agentID+userID下保持不变）
-func generateMCPToken(agentID string, userID uint) (string, error) {
+func generateMCPToken(agentID string, userID uint, endpointAuthToken string) (string, error) {
 	// 创建自定义的JWT Claims
 	type MCPClaims struct {
 		UserID     uint   `json:"userId"`
@@ -4965,7 +4991,7 @@ func generateMCPToken(agentID string, userID uint) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
 	// 使用与middleware相同的密钥
-	jwtSecret := []byte("xiaozhi_admin_secret_key")
+	jwtSecret := []byte(strings.TrimSpace(endpointAuthToken))
 	tokenString, err := token.SignedString(jwtSecret)
 	if err != nil {
 		return "", err
@@ -4975,7 +5001,7 @@ func generateMCPToken(agentID string, userID uint) (string, error) {
 }
 
 // generateOpenClawToken 生成稳定的OpenClaw JWT Token（同一agentID+userID下保持不变）
-func generateOpenClawToken(agentID string, userID uint) (string, error) {
+func generateOpenClawToken(agentID string, userID uint, endpointAuthToken string) (string, error) {
 	type OpenClawClaims struct {
 		UserID     uint   `json:"user_id"`
 		AgentID    string `json:"agent_id"`
@@ -4994,7 +5020,7 @@ func generateOpenClawToken(agentID string, userID uint) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	jwtSecret := []byte("xiaozhi_admin_secret_key")
+	jwtSecret := []byte(strings.TrimSpace(endpointAuthToken))
 	tokenString, err := token.SignedString(jwtSecret)
 	if err != nil {
 		return "", err

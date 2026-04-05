@@ -430,11 +430,11 @@ func init() {
 	RegisterResourceType[llm.LLMProvider](
 		"llm",
 		func(rt, p string, cfg map[string]interface{}) (llm.LLMProvider, error) {
-			llmType, ok := cfg["type"].(string)
-			if !ok {
-				llmType = p
+			providerName, ok := cfg["provider"].(string)
+			if !ok || providerName == "" {
+				providerName = p
 			}
-			return llm.GetLLMProvider(llmType, cfg)
+			return llm.GetLLMProvider(providerName, cfg)
 		},
 		WithIsValidFunc(func(p interface{}) bool {
 			if llmProvider, ok := p.(llm.LLMProvider); ok && llmProvider != nil {

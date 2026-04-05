@@ -20,6 +20,8 @@ import (
 
 type UserController struct {
 	DB                  *gorm.DB
+	InternalAuthToken   string
+	EndpointAuthToken   string
 	WebSocketController interface {
 		RequestMcpToolDetailsFromClient(ctx context.Context, agentID string) ([]MCPTool, error)
 		RequestDeviceMcpToolDetailsFromClient(ctx context.Context, deviceID string) ([]MCPTool, error)
@@ -963,7 +965,7 @@ func (uc *UserController) GetAgentMCPEndpoint(c *gin.Context) {
 	}
 
 	// 使用公共函数生成MCP接入点
-	endpoint, err := GenerateAgentMCPEndpoint(uc.DB, agentID, userID.(uint))
+	endpoint, err := GenerateAgentMCPEndpoint(uc.DB, agentID, userID.(uint), uc.EndpointAuthToken)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -988,7 +990,7 @@ func (uc *UserController) GetAgentOpenClawEndpoint(c *gin.Context) {
 		return
 	}
 
-	endpoint, err := GenerateAgentOpenClawEndpoint(uc.DB, agentID, userID.(uint))
+	endpoint, err := GenerateAgentOpenClawEndpoint(uc.DB, agentID, userID.(uint), uc.EndpointAuthToken)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

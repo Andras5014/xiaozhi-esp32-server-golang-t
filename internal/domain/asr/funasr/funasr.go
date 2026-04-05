@@ -7,8 +7,10 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"xiaozhi-esp32-server-golang/constants"
 	log "xiaozhi-esp32-server-golang/logger"
 
@@ -50,6 +52,14 @@ type Funasr struct {
 	connMutex sync.RWMutex
 	// 发送锁，确保同一时间只有一个请求在使用连接
 	sendMutex sync.Mutex
+}
+
+var funasrStreamSeq atomic.Uint64
+var funasrStreamPrefix = uuid.NewString()
+
+type streamDebugState struct {
+	audioChunkCount  atomic.Uint64
+	audioSampleCount atomic.Uint64
 }
 
 // FunasrRequest FunASR WebSocket请求结构体
@@ -94,6 +104,7 @@ func (f *Funasr) getConnection(ctx context.Context) (*websocket.Conn, error) {
 	f.connMutex.RUnlock()
 
 	if conn != nil {
+		log.Debugf("FunASR WebSocket 复用连接: conn=%p", conn)
 		return conn, nil
 	}
 
@@ -114,7 +125,7 @@ func (f *Funasr) getConnection(ctx context.Context) (*websocket.Conn, error) {
 	}
 
 	f.conn = conn
-	log.Infof("FunASR WebSocket 连接已建立")
+	log.Infof("FunASR WebSocket 连接已建立: conn=%p", conn)
 	return conn, nil
 }
 
@@ -124,9 +135,9 @@ func (f *Funasr) clearConnection() {
 	defer f.connMutex.Unlock()
 
 	if f.conn != nil {
+		log.Infof("FunASR WebSocket 连接已清空: conn=%p", f.conn)
 		f.conn.Close()
 		f.conn = nil
-		log.Infof("FunASR WebSocket 连接已清空，等待下次重连")
 	}
 }
 
@@ -202,6 +213,9 @@ func (f *Funasr) StreamingRecognize(ctx context.Context, audioStream <-chan []fl
 	}
 
 	subCtx, cancelFunc := context.WithCancel(ctx)
+	streamID := fmt.Sprintf("funasr-stream-%s-%d", funasrStreamPrefix, funasrStreamSeq.Add(1))
+	wavName := streamID
+	debugState := &streamDebugState{}
 
 	// 发送初始消息
 	firstMessage := FunasrRequest{
@@ -209,12 +223,22 @@ func (f *Funasr) StreamingRecognize(ctx context.Context, audioStream <-chan []fl
 		ChunkSize:     []int{5, 10, 5},
 		ChunkInterval: f.config.ChunkInterval,
 		AudioFs:       f.config.SampleRate,
-		WavName:       "stream",
+		WavName:       wavName,
 		WavFormat:     "pcm",
 		IsSpeaking:    true,
 		Hotwords:      "{\"阿里巴巴\":20,\"hello world\":40}",
 		Itn:           true,
 	}
+
+	log.Debugf(
+		"funasr StreamingRecognize 开始: stream_id=%s, conn=%p, mode=%s, chunk_interval=%d, chunk_size=%v, wav_name=%s",
+		streamID,
+		conn,
+		f.config.Mode,
+		f.config.ChunkInterval,
+		firstMessage.ChunkSize,
+		firstMessage.WavName,
+	)
 
 	messageBytes, err := json.Marshal(firstMessage)
 	if err != nil {
@@ -244,25 +268,32 @@ func (f *Funasr) StreamingRecognize(ctx context.Context, audioStream <-chan []fl
 	// 在 goroutine 完成时释放锁
 	go func() {
 		defer wg.Done()
-		f.recvResult(subCtx, conn, resultChan)
+		f.recvResult(subCtx, conn, streamID, wavName, debugState, resultChan)
 	}()
 
 	go func() {
 		defer wg.Done()
-		f.forwardStreamAudio(subCtx, cancelFunc, conn, audioStream)
+		f.forwardStreamAudio(subCtx, cancelFunc, conn, streamID, wavName, debugState, audioStream)
 	}()
 
 	// 在后台等待 goroutine 完成并释放锁
 	go func() {
 		wg.Wait()
+		f.clearConnection()
 		f.sendMutex.Unlock()
-		log.Debugf("funasr StreamingRecognize goroutine 完成，已释放 sendMutex")
+		log.Debugf(
+			"funasr StreamingRecognize goroutine 完成，已释放 sendMutex: stream_id=%s, wav_name=%s, chunks=%d, samples=%d",
+			streamID,
+			wavName,
+			debugState.audioChunkCount.Load(),
+			debugState.audioSampleCount.Load(),
+		)
 	}()
 
 	return resultChan, nil
 }
 
-func (f *Funasr) recvResult(ctx context.Context, conn *websocket.Conn, resultChan chan types.StreamingResult) {
+func (f *Funasr) recvResult(ctx context.Context, conn *websocket.Conn, streamID string, wavName string, debugState *streamDebugState, resultChan chan types.StreamingResult) {
 	defer func() {
 		close(resultChan)
 	}()
@@ -279,17 +310,37 @@ func (f *Funasr) recvResult(ctx context.Context, conn *websocket.Conn, resultCha
 
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Debugf("funasr recvResult 读取识别结果失败: %v，清空连接", err)
+			log.Debugf("funasr recvResult 读取识别结果失败: stream_id=%s, conn=%p, err=%v，清空连接", streamID, conn, err)
 			// 读取失败，清空连接，下次使用时自动重连
 			f.clearConnection()
 			return
 		}
-		log.Debugf("funasr recvResult 读取识别结果: %v", string(message))
+		log.Debugf(
+			"funasr recvResult 读取识别结果: stream_id=%s, conn=%p, chunks=%d, samples=%d, payload=%v",
+			streamID,
+			conn,
+			debugState.audioChunkCount.Load(),
+			debugState.audioSampleCount.Load(),
+			string(message),
+		)
 
 		var response FunasrResponse
 		err = json.Unmarshal(message, &response)
 		if err != nil {
 			log.Debugf("funasr recvResult 解析识别结果失败: %v", err)
+			continue
+		}
+
+		if response.WavName != "" && response.WavName != wavName {
+			log.Warnf(
+				"funasr recvResult 忽略非当前流结果: stream_id=%s, expected_wav=%s, actual_wav=%s, conn=%p, chunks=%d, samples=%d",
+				streamID,
+				wavName,
+				response.WavName,
+				conn,
+				debugState.audioChunkCount.Load(),
+				debugState.audioSampleCount.Load(),
+			)
 			continue
 		}
 
@@ -315,7 +366,17 @@ func (f *Funasr) recvResult(ctx context.Context, conn *websocket.Conn, resultCha
 		// 结果发送成功
 		// 如果是最终结果且输入已结束，则退出循环
 		if streamingResult.IsFinal {
-			log.Debugf("funasr recvResult isfinal, response_mode=%s, raw_is_final=%v", response.Mode, response.IsFinal)
+			log.Debugf(
+				"funasr recvResult isfinal: stream_id=%s, conn=%p, response_mode=%s, raw_is_final=%v, text_len=%d, wav_name=%s, chunks=%d, samples=%d",
+				streamID,
+				conn,
+				response.Mode,
+				response.IsFinal,
+				len([]rune(response.Text)),
+				response.WavName,
+				debugState.audioChunkCount.Load(),
+				debugState.audioSampleCount.Load(),
+			)
 			return
 		}
 	}
@@ -338,24 +399,35 @@ func (f *Funasr) toStreamingResult(response FunasrResponse) types.StreamingResul
 		}
 	}
 
+	if result.IsFinal && strings.TrimSpace(result.Text) == "" {
+		result.EmptyReason = types.EmptyReasonProviderEmptyFinal
+	}
+
 	return result
 }
 
-func (f *Funasr) forwardStreamAudio(ctx context.Context, cancelFunc context.CancelFunc, conn *websocket.Conn, audioStream <-chan []float32) {
+func (f *Funasr) forwardStreamAudio(ctx context.Context, cancelFunc context.CancelFunc, conn *websocket.Conn, streamID string, wavName string, debugState *streamDebugState, audioStream <-chan []float32) {
 	sendEndMsg := func() {
 		// 发送终止消息
 		endMessage := FunasrRequest{
 			Mode:          f.config.Mode,
 			ChunkInterval: f.config.ChunkInterval,
 			ChunkSize:     []int{5, 10, 5},
-			WavName:       "stream",
+			WavName:       wavName,
 			IsSpeaking:    false,
 		}
 		endMessageBytes, _ := json.Marshal(endMessage)
-		log.Debugf("funasr forwardStreamAudio 发送结束消息: %v", string(endMessageBytes))
+		log.Debugf(
+			"funasr forwardStreamAudio 发送结束消息: stream_id=%s, conn=%p, chunks=%d, samples=%d, payload=%v",
+			streamID,
+			conn,
+			debugState.audioChunkCount.Load(),
+			debugState.audioSampleCount.Load(),
+			string(endMessageBytes),
+		)
 		err := f.writeMessage(conn, websocket.TextMessage, endMessageBytes)
 		if err != nil {
-			log.Debugf("funasr forwardStreamAudio 发送结束消息失败: %v，清空连接", err)
+			log.Debugf("funasr forwardStreamAudio 发送结束消息失败: stream_id=%s, conn=%p, err=%v，清空连接", streamID, conn, err)
 			f.clearConnection()
 		}
 	}
@@ -364,13 +436,27 @@ func (f *Funasr) forwardStreamAudio(ctx context.Context, cancelFunc context.Canc
 		select {
 		case <-ctx.Done():
 			// 上下文取消，发送结束消息并退出
-			log.Debugf("funasr forwardStreamAudio 上下文已取消: %v", ctx.Err())
+			log.Debugf(
+				"funasr forwardStreamAudio 上下文已取消: stream_id=%s, conn=%p, chunks=%d, samples=%d, err=%v",
+				streamID,
+				conn,
+				debugState.audioChunkCount.Load(),
+				debugState.audioSampleCount.Load(),
+				ctx.Err(),
+			)
 			// 注意：这里不需要调用 cancelFunc()，因为 ctx.Done() 已经被触发说明上下文已取消
 			sendEndMsg()
 			return
 		case pcmChunk, ok := <-audioStream:
 			if !ok {
 				// 通道已关闭，结束输入，需要通知接收goroutine停止
+				log.Debugf(
+					"funasr forwardStreamAudio 音频通道关闭: stream_id=%s, conn=%p, chunks=%d, samples=%d",
+					streamID,
+					conn,
+					debugState.audioChunkCount.Load(),
+					debugState.audioSampleCount.Load(),
+				)
 				sendEndMsg()
 				return
 			}
@@ -383,10 +469,23 @@ func (f *Funasr) forwardStreamAudio(ctx context.Context, cancelFunc context.Canc
 			// 发送音频数据
 			err := f.writeMessage(conn, websocket.BinaryMessage, audioBytes)
 			if err != nil {
-				log.Debugf("funasr forwardStreamAudio 发送音频数据失败: %v，清空连接", err)
+				log.Debugf("funasr forwardStreamAudio 发送音频数据失败: stream_id=%s, conn=%p, err=%v，清空连接", streamID, conn, err)
 				f.clearConnection()
 				cancelFunc() // 发送失败时取消上下文，通知 recvResult goroutine 停止
 				return
+			}
+			chunkCount := debugState.audioChunkCount.Add(1)
+			sampleCount := debugState.audioSampleCount.Add(uint64(len(pcmChunk)))
+			if chunkCount <= 3 || chunkCount%10 == 0 {
+				log.Debugf(
+					"funasr forwardStreamAudio 已发送音频块: stream_id=%s, conn=%p, chunk=%d, chunk_samples=%d, total_samples=%d, bytes=%d",
+					streamID,
+					conn,
+					chunkCount,
+					len(pcmChunk),
+					sampleCount,
+					len(audioBytes),
+				)
 			}
 		}
 	}

@@ -104,14 +104,23 @@ var VoiceOptions = map[string][]VoiceOption{
 	},
 
 	// 豆包 WebSocket TTS 音色列表
-	// 参考：https://www.volcengine.com/docs/6561/1257544?lang=zh
-	// 注意：doubao_ws使用的音色格式为 zh_female_xxx_bigtts 或 zh_male_xxx_bigtts 格式
-	// 根据文档，音色名称格式为：zh_{gender}_{name}_bigtts
-	// 由于文档页面需要JavaScript才能查看完整内容，这里列出常见的音色
-	// 用户也可以手动输入不在列表中的音色值
+	// 参考官方文档《音色列表》：
+	// https://www.volcengine.com/docs/6561/1257544?lang=zh
+	// 这里维护的是项目内常用的官方在线音色候选项。
+	// 注意：音色列表仅作为候选项展示，不再依据音色名强绑定 model/resource_id。
+	// 实际可用性仍取决于当前 appid/access_token 在火山控制台实际开通的资源。
 
 	"doubao_ws": {
 		// 女声音色
+		{Value: "zh_female_cancan_mars_bigtts", Label: "灿灿 / Shiny（女声）"},
+		{Value: "zh_female_vv_uranus_bigtts", Label: "vivi 2.0（女声）"},
+		{Value: "zh_female_vv_jupiter_bigtts", Label: "vivi O版（女声）"},
+		{Value: "zh_female_xiaohe_jupiter_bigtts", Label: "小何 O版（女声）"},
+		{Value: "saturn_zh_female_cancan_tob", Label: "知性灿灿（女声）"},
+		{Value: "saturn_zh_female_keainvsheng_tob", Label: "可爱女生（女声）"},
+		{Value: "saturn_zh_female_tiaopigongzhu_tob", Label: "调皮公主（女声）"},
+		{Value: "zh_female_xiaohe_uranus_bigtts", Label: "小何（女声）"},
+		{Value: "zh_female_tianmeitaozi_mars_bigtts", Label: "甜美桃子（女声）"},
 		{Value: "zh_female_wanwanxiaohe_moon_bigtts", Label: "湾湾小何（女声）"},
 		{Value: "zh_female_qinqienvsheng_moon_bigtts", Label: "亲切女声（女声）"},
 		{Value: "zh_female_vv_mars_bigtts", Label: "Vivi（女声）"},
@@ -120,6 +129,9 @@ var VoiceOptions = map[string][]VoiceOption{
 		{Value: "zh_female_kailangjiejie_moon_bigtts", Label: "开朗姐姐（女声）"},
 		{Value: "zh_female_tianmeiyueyue_moon_bigtts", Label: "甜美悦悦（女声）"},
 		{Value: "zh_female_xinlingjitang_moon_bigtts", Label: "心灵鸡汤（女声）"},
+		{Value: "zh_female_zhixingnvsheng_mars_bigtts", Label: "知性女声（女声）"},
+		{Value: "zh_female_wenroushunv_mars_bigtts", Label: "温柔淑女（女声）"},
+		{Value: "zh_female_wenrouxiaoya_moon_bigtts", Label: "温柔小雅（女声）"},
 		{Value: "zh_female_linjianvhai_moon_bigtts", Label: "邻家女孩（女声）"},
 		{Value: "zh_female_shuangkuaisisi_moon_bigtts", Label: "爽快思思/Skye（女声）"},
 		{Value: "zh_female_gaolengyujie_moon_bigtts", Label: "高冷御姐（女声）"},
@@ -137,10 +149,22 @@ var VoiceOptions = map[string][]VoiceOption{
 		{Value: "ICL_zh_female_tiexinnvyou_tob", Label: "贴心女友（女声）"},
 		{Value: "ICL_zh_female_xingganyujie_tob", Label: "性感御姐（女声）"},
 		{Value: "ICL_zh_female_lixingyuanzi_cs_tob", Label: "理性圆子（客服女声）"},
+		{Value: "ICL_zh_female_wuxi_tob", Label: "元气甜妹（女声）"},
+		{Value: "ICL_zh_female_zhixingwenwan_tob", Label: "知性温婉（女声）"},
 
 		// 男声音色
+		{Value: "saturn_zh_male_shuanglangshaonian_tob", Label: "爽朗少年（男声）"},
+		{Value: "saturn_zh_male_tiancaitongzhuo_tob", Label: "天才同桌（男声）"},
+		{Value: "zh_male_yunzhou_jupiter_bigtts", Label: "云舟 O版（男声）"},
+		{Value: "zh_male_xiaotian_jupiter_bigtts", Label: "小天 O版（男声）"},
+		{Value: "zh_male_m191_uranus_bigtts", Label: "云舟（男声）"},
+		{Value: "zh_male_taocheng_uranus_bigtts", Label: "小天（男声）"},
+		{Value: "en_male_tim_uranus_bigtts", Label: "Tim（英文男声）"},
 		{Value: "zh_male_yangguangqingnian_moon_bigtts", Label: "阳光青年（男声）"},
 		{Value: "zh_male_qingshuangnanda_mars_bigtts", Label: "清爽男大（男声）"},
+		{Value: "zh_male_wenrouxiaoge_mars_bigtts", Label: "温柔小哥（男声）"},
+		{Value: "zh_male_qingcang_mars_bigtts", Label: "擎苍（男声）"},
+		{Value: "zh_male_ruyaqingnian_mars_bigtts", Label: "儒雅青年（男声）"},
 		{Value: "zh_male_jieshuoxiaoming_moon_bigtts", Label: "解说小明（男声）"},
 		{Value: "zh_male_linjiananhai_moon_bigtts", Label: "邻家男孩（男声）"},
 		{Value: "zh_male_yuanboxiaoshu_moon_bigtts", Label: "渊博小叔（男声）"},

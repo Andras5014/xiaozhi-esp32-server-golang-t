@@ -2,12 +2,13 @@ import api from './api'
 
 /** 从接口条目解析为统一结果（含 first_packet_ms） */
 function normItem(item) {
-  if (!item || typeof item !== 'object') return { ok: false, message: '', first_packet_ms: undefined }
+  if (!item || typeof item !== 'object') return { ok: false, message: '', first_packet_ms: undefined, reasoning_content_returned: false }
   const ms = item.first_packet_ms
   return {
     ok: !!item.ok,
     message: item.message || '',
-    first_packet_ms: typeof ms === 'number' ? ms : (ms != null ? Number(ms) : undefined)
+    first_packet_ms: typeof ms === 'number' ? ms : (ms != null ? Number(ms) : undefined),
+    reasoning_content_returned: !!item.reasoning_content_returned
   }
 }
 

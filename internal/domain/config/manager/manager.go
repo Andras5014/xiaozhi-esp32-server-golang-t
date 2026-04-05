@@ -9,6 +9,7 @@ import (
 	"time"
 	"xiaozhi-esp32-server-golang/internal/components/http"
 	"xiaozhi-esp32-server-golang/internal/domain/config/types"
+	"xiaozhi-esp32-server-golang/internal/util"
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
@@ -46,8 +47,13 @@ func NewManagerUserConfigProvider(config map[string]interface{}) (*ConfigManager
 	}
 
 	// 创建Manager HTTP客户端
+	authToken := util.GetManagerAuthToken()
+	if token, ok := config["auth_token"].(string); ok && strings.TrimSpace(token) != "" {
+		authToken = strings.TrimSpace(token)
+	}
 	managerClient := http.NewManagerClient(http.ManagerClientConfig{
 		BaseURL:    baseURL,
+		AuthToken:  authToken,
 		Timeout:    10 * time.Second,
 		MaxRetries: 3,
 	})

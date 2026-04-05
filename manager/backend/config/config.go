@@ -8,12 +8,14 @@ import (
 )
 
 type Config struct {
-	Server         ServerConfig         `json:"server"`
-	Database       DatabaseConfig       `json:"database"`
-	JWT            JWTConfig            `json:"jwt"`
-	SpeakerService SpeakerServiceConfig `json:"speaker_service"`
-	Storage        StorageConfig        `json:"storage"`
-	History        HistoryConfig        `json:"history"`
+	Server            ServerConfig         `json:"server"`
+	Database          DatabaseConfig       `json:"database"`
+	JWT               JWTConfig            `json:"jwt"`
+	InternalAuthToken string               `json:"internal_auth_token"`
+	EndpointAuthToken string               `json:"endpoint_auth_token"`
+	SpeakerService    SpeakerServiceConfig `json:"speaker_service"`
+	Storage           StorageConfig        `json:"storage"`
+	History           HistoryConfig        `json:"history"`
 }
 
 type ServerConfig struct {
@@ -22,7 +24,7 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Type   string        `json:"type"`             // "mysql" 或 "sqlite"，决定使用哪种数据库
+	Type   string        `json:"type"` // "mysql" 或 "sqlite"，决定使用哪种数据库
 	MySQL  *MySQLConfig  `json:"mysql,omitempty"`
 	SQLite *SQLiteConfig `json:"sqlite,omitempty"`
 }

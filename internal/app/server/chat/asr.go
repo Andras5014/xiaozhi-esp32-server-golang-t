@@ -12,6 +12,7 @@ import (
 	"xiaozhi-esp32-server-golang/internal/domain/asr"
 	asr_types "xiaozhi-esp32-server-golang/internal/domain/asr/types"
 	"xiaozhi-esp32-server-golang/internal/domain/audio"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
 	"xiaozhi-esp32-server-golang/internal/domain/speaker"
 	"xiaozhi-esp32-server-golang/internal/domain/vad/inter"
 	"xiaozhi-esp32-server-golang/internal/pool"
@@ -53,6 +54,7 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 	state := a.clientState
 	go func() {
 		hasTriggeredCancel := true // 标志位，记录是否已触发过取消操作（当 voiceDuration > 120 时）
+		hasLoggedFirstTextExtendedWait := false
 		audioFormat := state.InputAudioFormat
 		// 使用一个足够大的缓冲区用于解码（假设最大帧时长为120ms）
 		maxFrameSize := audioFormat.SampleRate * audioFormat.Channels * 120 / 1000
@@ -248,6 +250,7 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 				}
 
 				if haveVoice {
+					hasLoggedFirstTextExtendedWait = false
 					//log.Infof("检测到语音, len: %d", len(pcmData))
 					state.SetClientHaveVoice(true)
 					state.SetClientHaveVoiceLastTime(time.Now().UnixMilli())
@@ -266,7 +269,7 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 						if !hasTriggeredCancel {
 							//realtime模式下, 如果此时有正在进行的llm和tts则取消掉
 							log.Debugf("realtime模式vad打断下 && 语音时长超过%d ms 如果此时有正在进行的llm和tts则取消掉", continuousVoiceDuration)
-							state.AfterAsrSessionCtx.Cancel()
+							state.AfterAsrSessionCtx.CancelWithReason("ASRManager.ProcessVadAudio: realtime_mode=1 VAD interrupt")
 							if a.session != nil {
 								a.session.InterruptAndClearTTSQueue()
 							}
@@ -288,14 +291,8 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 					}
 				}
 
-				if clientHaveVoice {
-					if state.Asr.ShouldRestartOnVoice() {
-						log.Debugf("检测到新的语音输入，重启待恢复的ASR流")
-						if restartErr := a.RestartAsrRecognition(ctx); restartErr != nil {
-							log.Errorf("检测到语音后重启ASR识别失败: %v", restartErr)
-							continue
-						}
-					}
+				if clientHaveVoice || haveVoice {
+					// 首次命中语音时也要立刻转发当前缓存帧，避免极短语音整段未送入 ASR。
 
 					//vad识别成功, 往asr音频通道里发送数据
 					//log.Infof("vad识别成功, 往asr音频通道里发送数据, len: %d", len(pcmData))
@@ -350,24 +347,18 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 							continue
 						}
 
-						log.Warnf(
-							"realtime模式静音超时且仍未收到ASR文本，挂起当前ASR流等待下一次语音: status=%s, idle=%dms, pre_text_timeout=%dms, voice_duration=%dms, voice_duration_in_session=%dms, history_audio_samples=%d",
-							state.Status,
-							idleDuration,
-							preTextSilenceDuration,
-							state.Vad.GetVoiceDuration(),
-							voiceDurationInSession,
-							state.Asr.GetHistoryAudioLen(),
-						)
-						hasTriggeredCancel = false
-						state.Asr.ResetReceivedText()
-						state.Asr.SetPendingRestartOnVoice(true)
-						if state.Asr.Cancel != nil {
-							state.Asr.Cancel()
+						if !hasLoggedFirstTextExtendedWait {
+							log.Debugf(
+								"realtime模式静音超时且仍未收到ASR文本，继续保持当前ASR流并转发音频: status=%s, idle=%dms, pre_text_timeout=%dms, voice_duration=%dms, voice_duration_in_session=%dms, history_audio_samples=%d",
+								state.Status,
+								idleDuration,
+								preTextSilenceDuration,
+								state.Vad.GetVoiceDuration(),
+								voiceDurationInSession,
+								state.Asr.GetHistoryAudioLen(),
+							)
+							hasLoggedFirstTextExtendedWait = true
 						}
-						state.VoiceStatus.Reset()
-						state.Vad.ResetIdleDuration()
-						state.Vad.ResetVoiceDuration()
 						continue
 					}
 
@@ -379,7 +370,6 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 							state.Vad.GetVoiceDuration(),
 							state.Vad.GetVoiceDurationInSession(),
 							state.Asr.GetHistoryAudioLen(),
-							state.Asr.ShouldRestartOnVoice(),
 						)
 						// 在 OnVoiceSilence 之前重置标志位，以便下次可以再次触发
 						hasTriggeredCancel = false
@@ -418,9 +408,7 @@ func (a *ASRManager) RestartAsrRecognition(ctx context.Context) error {
 	log.Debugf("重启ASR识别开始")
 
 	// 取消当前ASR上下文
-	if state.Asr.Cancel != nil {
-		state.Asr.Cancel()
-	}
+	state.Asr.CancelWithReason("ASRManager.RestartAsrRecognition: cancel previous ASR context before restart")
 
 	state.Asr.ResetReceivedText()
 	state.VoiceStatus.Reset()
@@ -471,9 +459,11 @@ func (a *ASRManager) RestartAsrRecognition(ctx context.Context) error {
 	}
 
 	state.AsrResultChannel = asrResultChannel
-	state.Asr.SetPendingRestartOnVoice(false)
-	// 设置ASR开始时间，用于统计识别耗时
-	state.SetStartAsrTs()
+	// 重置统计时间，用于计算本轮对话的整体耗时
+	state.MarkTurnStart()
+	if a.session != nil {
+		a.session.TraceTurnStart(state.Asr.Ctx, state.Statistic.TurnStartTs)
+	}
 	log.Debugf("重启ASR识别成功")
 	return nil
 }
@@ -536,11 +526,6 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 			default:
 			}
 
-			if state.Asr.ShouldRestartOnVoice() {
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-
 			result, isRetry, err := state.RetireAsrResult(ctx)
 			if err != nil {
 				log.Errorf("处理asr结果失败: %v", err)
@@ -598,17 +583,11 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 					}
 
 					log.Warnf("ASR可恢复错误发生时当前状态不允许立即重启: reason=%s, status=%s, realtime=%v", result.RetryReason, state.Status, state.IsRealTime())
-					state.Asr.SetPendingRestartOnVoice(true)
-					if state.Asr.Cancel != nil {
-						state.Asr.Cancel()
-					}
+					state.Asr.CancelWithReason("ASRManager.StartAsrRecognitionLoop: recoverable error but restart not allowed yet")
 					continue
 				case asr_types.RetryReasonDoubaoWaitingNextPacketTimeout:
 					log.Warnf("doubao ASR 会话空闲超时，挂起当前流并等待下一次语音时重建")
-					state.Asr.SetPendingRestartOnVoice(true)
-					if state.Asr.Cancel != nil {
-						state.Asr.Cancel()
-					}
+					state.Asr.CancelWithReason("ASRManager.StartAsrRecognitionLoop: doubao waiting next packet timeout")
 					continue
 				}
 			}
@@ -620,7 +599,43 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				recoverableErrorWindowStart = time.Now()
 				recoverableErrorCount = 0
 
-				// 创建用户消息
+				//如果是realtime模式下，需要停止 当前的llm和tts
+				if state.IsRealTime() && viper.GetInt("chat.realtime_mode") == 2 {
+					log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
+					state.AfterAsrSessionCtx.CancelWithReason("ASRManager.StartAsrRecognitionLoop: realtime_mode=2 ASR result interrupt")
+					if a.session != nil {
+						a.session.InterruptAndClearTTSQueue()
+					}
+				}
+
+				// 重置重试计数器
+				startIdleTime = time.Now().Unix()
+
+				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
+				state.OnVoiceSilence()
+
+				// 获取暂存的声纹结果（带超时）
+				speakerResult := a.getSpeakerResult()
+				state.MarkAsrFinalText()
+				if a.session != nil {
+					a.session.TraceAsrFinalText(ctx, time.Now().UnixMilli())
+				}
+
+				if a.session != nil {
+					payload, stop, hookErr := a.session.hookHub.EmitASROutput(a.session.hookContext(ctx), chathooks.ASROutputData{Text: text, SpeakerResult: speakerResult})
+					if hookErr != nil {
+						log.Warnf("ASR_OUTPUT hook 执行失败: %v", hookErr)
+					}
+					text = payload.Text
+					speakerResult = payload.SpeakerResult
+					if stop {
+						log.Infof("ASR_OUTPUT hook 请求停止当前流程")
+						state.Asr.ClearHistoryAudio()
+						continue
+					}
+				}
+
+				// 创建用户消息，使用 hook 改写后的文本进入后续副作用链
 				userMsg := &schema.Message{
 					Role:    schema.User,
 					Content: text,
@@ -648,22 +663,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 					onMessageSave(userMsg, messageID, audioData)
 				}
 
-				//如果是realtime模式下，需要停止 当前的llm和tts
-				if state.IsRealTime() && viper.GetInt("chat.realtime_mode") == 2 {
-					log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
-					state.AfterAsrSessionCtx.Cancel()
-					if a.session != nil {
-						a.session.InterruptAndClearTTSQueue()
-					}
-				}
-
-				// 重置重试计数器
-				startIdleTime = time.Now().Unix()
-
-				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
-				state.OnVoiceSilence()
-
-				//发送asr消息
+				// 发送给客户端的 ASR 结果也使用 hook 改写后的文本
 				err = a.serverTransport.SendAsrResult(text)
 				if err != nil {
 					log.Errorf("发送asr消息失败: %v", err)
@@ -672,9 +672,6 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 					}
 					return
 				}
-
-				// 获取暂存的声纹结果（带超时）
-				speakerResult := a.getSpeakerResult()
 
 				// 添加到队列（迁移到 ASRManager 中处理）
 				if err := a.addAsrResultToQueue(text, speakerResult); err != nil {
@@ -703,10 +700,9 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				continue
 			} else {
 				log.Debugf(
-					"ASR空结果详情: status=%s, emptyReason=%s, pending_restart=%v, client_voice_stop=%v, history_audio_samples=%d, voice_duration=%dms, voice_duration_in_session=%dms, idle_duration=%dms, realtime=%v",
+					"ASR空结果详情: status=%s, emptyReason=%s, client_voice_stop=%v, history_audio_samples=%d, voice_duration=%dms, voice_duration_in_session=%dms, idle_duration=%dms, realtime=%v",
 					state.Status,
 					result.EmptyReason,
-					state.Asr.ShouldRestartOnVoice(),
 					state.GetClientVoiceStop(),
 					state.Asr.GetHistoryAudioLen(),
 					state.Vad.GetVoiceDuration(),
@@ -721,10 +717,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 
 					if result.EmptyReason == asr_types.EmptyReasonNoServerResponse ||
 						result.EmptyReason == asr_types.EmptyReasonProviderEmptyFinal {
-						state.Asr.SetPendingRestartOnVoice(true)
-						if state.Asr.Cancel != nil {
-							state.Asr.Cancel()
-						}
+						state.Asr.CancelWithReason("ASRManager.StartAsrRecognitionLoop: empty final result from provider")
 						continue
 					}
 				}

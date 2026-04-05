@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	log "xiaozhi-esp32-server-golang/logger"
@@ -12,43 +11,43 @@ import (
 const stopSpeakingInterruptTimeout = 2 * time.Second
 
 func (s *ChatSession) StopSpeaking(isSendTtsStop bool) {
-	s.clientState.SessionCtx.Cancel()
-	s.clientState.AfterAsrSessionCtx.Cancel()
+	s.stopSpeakingWithLock(true, isSendTtsStop)
+}
+
+func (s *ChatSession) StopSpeakingAfterAsr(isSendTtsStop bool) {
+	s.stopSpeakingWithLock(false, isSendTtsStop)
+}
+
+// stopSpeakingWithLock 在 stopSpeaking 基础上增加了 mutex 保护
+func (s *ChatSession) stopSpeakingWithLock(cancelSession bool, isSendTtsStop bool) {
+	s.stopSpeakingMu.Lock()
+	defer s.stopSpeakingMu.Unlock()
+	s.stopSpeaking(cancelSession, isSendTtsStop)
+}
+
+func (s *ChatSession) stopSpeaking(cancelSession bool, isSendTtsStop bool) {
+	if cancelSession {
+		s.clientState.SessionCtx.CancelWithReason("ChatSession.stopSpeaking: session_ctx")
+		s.invalidateListenStart()
+	}
+	s.clientState.AfterAsrSessionCtx.CancelWithReason("ChatSession.stopSpeaking: after_asr_ctx")
+
 	s.clientState.IsWelcomePlaying = false
-	s.invalidateListenStart()
 
 	s.ClearChatTextQueue()
 	s.llmManager.ClearLLMResponseQueue()
 	s.ttsManager.ClearTTSQueue()
 	interruptCtx, cancel := context.WithTimeout(context.Background(), stopSpeakingInterruptTimeout)
 	defer cancel()
-	if err := s.ttsManager.InterruptAndClearQueueSync(interruptCtx); err != nil {
+	if err := s.ttsManager.InterruptAndStopSync(interruptCtx, isSendTtsStop, context.Canceled); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			log.Warnf("StopSpeaking sync interrupt timed out")
+			log.Warnf("stopSpeaking sync interrupt timed out, cancel_session=%v", cancelSession)
 		} else if !errors.Is(err, context.Canceled) {
-			log.Warnf("StopSpeaking sync interrupt failed: %v", err)
+			log.Warnf("stopSpeaking sync interrupt failed, cancel_session=%v, err=%v", cancelSession, err)
 		}
 	}
-
-	if isSendTtsStop {
-		s.serverTransport.SendTtsStop()
-	}
-
 }
 
 func (s *ChatSession) MqttClose() {
 	s.serverTransport.SendMqttGoodbye()
-}
-
-func isExpectedCancellationError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.Canceled) {
-		return true
-	}
-	errMsg := err.Error()
-	return strings.Contains(errMsg, "context canceled") ||
-		strings.Contains(errMsg, "上下文已取消") ||
-		strings.Contains(errMsg, "connection is closed")
 }

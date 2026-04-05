@@ -152,17 +152,16 @@ tts:
   doubao:
     appid: "你的appid"
     access_token: "access_token"    # 需要修改为自己的
-    cluster: "volcano_tts"
+    model: "seed-tts-1.1"
     voice: "BV001_streaming"
-    api_url: "https://openspeech.bytedance.com/api/v1/tts"
-    authorization: "Bearer;"
+    api_url: "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
   doubao_ws:
     appid: "你的appid"              # 需要修改为自己的
     access_token: "access_token"    # 需要修改为自己的
-    cluster: "volcano_tts"          # 貌似不用改
-    voice: "zh_female_wanwanxiaohe_moon_bigtts"  # 音色
-    ws_host: "openspeech.bytedance.com"          # 服务器地址
-    use_stream: true
+    model: "seed-tts-1.1"
+    resource_id: ""                 # 建议填写控制台里的实例 ID，如 TTS-SeedTTS2.xxxxx
+    voice: ""
+    ws_url: "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream"
   cosyvoice:
     api_url: "https://tts.linkerai.cn/tts"  # 地址
     spk_id: "spk_id"                        # 音色

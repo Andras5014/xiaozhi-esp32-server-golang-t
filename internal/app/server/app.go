@@ -99,7 +99,7 @@ func (app *App) initEventHandle() {
 	// 初始化消息处理器（总是启用，统一处理Redis+MemoryProvider+History）
 	historyCfg := history.HistoryClientConfig{
 		BaseURL:   util.GetBackendURL(),
-		AuthToken: viper.GetString("manager.history_auth_token"),
+		AuthToken: util.GetManagerAuthToken(),
 		Timeout:   viper.GetDuration("manager.history_timeout"),
 		Enabled:   true, // 总是启用
 	}

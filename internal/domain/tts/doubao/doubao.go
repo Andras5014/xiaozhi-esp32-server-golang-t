@@ -1,31 +1,29 @@
 package doubao
 
 import (
+	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"xiaozhi-esp32-server-golang/internal/domain/doubaoapi"
 	"xiaozhi-esp32-server-golang/internal/util"
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
-// 全局HTTP客户端，实现连接池
 var (
 	httpClient     *http.Client
 	httpClientOnce sync.Once
 )
 
-// 获取配置了连接池的HTTP客户端
 func getHTTPClient() *http.Client {
 	httpClientOnce.Do(func() {
 		transport := &http.Transport{
@@ -42,231 +40,276 @@ func getHTTPClient() *http.Client {
 		}
 		httpClient = &http.Client{
 			Transport: transport,
-			Timeout:   30 * time.Second,
+			Timeout:   90 * time.Second,
 		}
 	})
 	return httpClient
 }
 
-// DoubaoTTSProvider 读伴TTS提供者
 type DoubaoTTSProvider struct {
-	AppID         string
-	AccessToken   string
-	Cluster       string
-	Voice         string
-	APIURL        string
-	Authorization string
-	Header        map[string]string
+	AppID       string
+	AccessToken string
+	Model       string
+	ResourceID  string
+	Voice       string
+	APIURL      string
 }
 
-// 请求结构体
-type doubaoRequest struct {
-	App     appInfo     `json:"app"`
-	User    userInfo    `json:"user"`
-	Audio   audioInfo   `json:"audio"`
-	Request requestInfo `json:"request"`
+type doubaoTTSV3Request struct {
+	User      doubaoTTSV3User      `json:"user"`
+	ReqParams doubaoTTSV3ReqParams `json:"req_params"`
 }
 
-type appInfo struct {
-	AppID   string `json:"appid"`
-	Token   string `json:"token"`
-	Cluster string `json:"cluster"`
-}
-
-type userInfo struct {
+type doubaoTTSV3User struct {
 	UID string `json:"uid"`
 }
 
-type audioInfo struct {
-	VoiceType   string  `json:"voice_type"`
-	Encoding    string  `json:"encoding"`
-	Rate        int     `json:"rate"`
-	SpeedRatio  float64 `json:"speed_ratio"`
-	VolumeRatio float64 `json:"volume_ratio"`
-	PitchRatio  float64 `json:"pitch_ratio"`
+type doubaoTTSV3AudioParams struct {
+	Format       string `json:"format"`
+	SampleRate   int    `json:"sample_rate"`
+	SpeechRate   int    `json:"speech_rate,omitempty"`
+	LoudnessRate int    `json:"loudness_rate,omitempty"`
 }
 
-type requestInfo struct {
-	ReqID        string `json:"reqid"`
-	Text         string `json:"text"`
-	TextType     string `json:"text_type"`
-	Operation    string `json:"operation"`
-	WithFrontend int    `json:"with_frontend"`
-	FrontendType string `json:"frontend_type"`
+type doubaoTTSV3ReqParams struct {
+	Text        string                 `json:"text"`
+	Speaker     string                 `json:"speaker"`
+	AudioParams doubaoTTSV3AudioParams `json:"audio_params"`
+	Model       string                 `json:"model,omitempty"`
 }
 
-// 响应结构体
-type doubaoResponse struct {
-	Data string `json:"data"`
+type doubaoTTSV3Event struct {
+	Code     int     `json:"code"`
+	Message  string  `json:"message"`
+	Data     *string `json:"data"`
+	Sequence int     `json:"sequence,omitempty"`
 }
 
-// 生成UUID
-func generateUUID() string {
-	b := make([]byte, 16)
-	_, err := rand.Read(b)
-	if err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
-}
-
-// NewDoubaoTTSProvider 创建新的读伴TTS提供者
 func NewDoubaoTTSProvider(config map[string]interface{}) *DoubaoTTSProvider {
 	appID, _ := config["appid"].(string)
 	accessToken, _ := config["access_token"].(string)
-	cluster, _ := config["cluster"].(string)
+	model, _ := config["model"].(string)
+	resourceID, _ := config["resource_id"].(string)
 	voice, _ := config["voice"].(string)
 	apiURL, _ := config["api_url"].(string)
-	authorization, _ := config["authorization"].(string)
-
-	// 检查令牌
-	if accessToken == "" {
-		log.Error("TTS 访问令牌不能为空")
-	}
 
 	return &DoubaoTTSProvider{
-		AppID:         appID,
-		AccessToken:   accessToken,
-		Cluster:       cluster,
-		Voice:         voice,
-		APIURL:        apiURL,
-		Authorization: authorization,
-		Header:        map[string]string{"Authorization": fmt.Sprintf("%s%s", authorization, accessToken)},
+		AppID:       appID,
+		AccessToken: accessToken,
+		Model:       normalizeDoubaoModel(model),
+		ResourceID:  strings.TrimSpace(resourceID),
+		Voice:       strings.TrimSpace(voice),
+		APIURL:      normalizeDoubaoTTSURL(apiURL, defaultDoubaoHTTPURL),
 	}
 }
 
-// TextToSpeech 将文本转换为语音，返回音频帧数据和错误
+func newDoubaoTTSV3Request(text, speaker string, sampleRate int, requestModel string) doubaoTTSV3Request {
+	return doubaoTTSV3Request{
+		User: doubaoTTSV3User{UID: doubaoapi.NewRequestID()},
+		ReqParams: doubaoTTSV3ReqParams{
+			Text:    text,
+			Speaker: speaker,
+			AudioParams: doubaoTTSV3AudioParams{
+				Format:     defaultDoubaoAudioFmt,
+				SampleRate: sampleRate,
+			},
+			Model: requestModel,
+		},
+	}
+}
+
 func (p *DoubaoTTSProvider) TextToSpeech(ctx context.Context, text string, sampleRate int, channels int, frameDuration int) ([][]byte, error) {
-	// 准备请求数据
-	reqData := doubaoRequest{
-		App: appInfo{
-			AppID:   p.AppID,
-			Token:   p.AccessToken,
-			Cluster: p.Cluster,
-		},
-		User: userInfo{
-			UID: "1",
-		},
-		Audio: audioInfo{
-			VoiceType:   p.Voice,
-			Encoding:    "wav",
-			Rate:        sampleRate,
-			SpeedRatio:  1.0,
-			VolumeRatio: 1.0,
-			PitchRatio:  1.0,
-		},
-		Request: requestInfo{
-			ReqID:        generateUUID(),
-			Text:         text,
-			TextType:     "plain",
-			Operation:    "query",
-			WithFrontend: 1,
-			FrontendType: "unitTson",
-		},
-	}
-
-	// 转换为JSON
-	jsonData, err := json.Marshal(reqData)
+	outputChan, err := p.TextToSpeechStream(ctx, text, sampleRate, channels, frameDuration)
 	if err != nil {
-		return nil, fmt.Errorf("无法序列化请求: %v", err)
+		return nil, err
 	}
+	frames := make([][]byte, 0, 32)
+	for frame := range outputChan {
+		if len(frame) > 0 {
+			frames = append(frames, frame)
+		}
+	}
+	if len(frames) == 0 {
+		return nil, fmt.Errorf("豆包 TTS 返回音频为空")
+	}
+	return frames, nil
+}
 
-	// 创建HTTP请求
-	req, err := http.NewRequest("POST", p.APIURL, bytes.NewBuffer(jsonData))
+func (p *DoubaoTTSProvider) TextToSpeechStream(ctx context.Context, text string, sampleRate int, channels int, frameDuration int) (chan []byte, error) {
+	return p.streamHTTP(ctx, text, sampleRate, frameDuration)
+}
+
+func (p *DoubaoTTSProvider) streamHTTP(ctx context.Context, text string, sampleRate int, frameDuration int) (chan []byte, error) {
+	voice := strings.TrimSpace(p.Voice)
+	if voice == "" {
+		return nil, fmt.Errorf("豆包 TTS 缺少 voice")
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	resolved, err := resolveDoubaoTTSModel(p.Model, voice)
 	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %v", err)
+		return nil, err
+	}
+	if strings.TrimSpace(p.ResourceID) != "" {
+		resolved.ResourceID = strings.TrimSpace(p.ResourceID)
+	}
+	if sampleRate <= 0 {
+		sampleRate = defaultDoubaoSampleHz
+	}
+	reqBody := newDoubaoTTSV3Request(text, voice, sampleRate, resolved.RequestModel)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("序列化豆包 TTS 请求失败: %w", err)
 	}
 
-	// 设置请求头
-	for k, v := range p.Header {
-		req.Header.Set(k, v)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.APIURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("创建豆包 TTS 请求失败: %w", err)
+	}
+	headers := doubaoapi.NewTTSHeaders(p.AppID, p.AccessToken, resolved.ResourceID)
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 
-	// 使用连接池发送请求
 	client := getHTTPClient()
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("发送请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// 读取响应
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %v", err)
-	}
-
-	// 解析响应
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %v", err)
-	}
-
-	// 提取音频数据
-	if audioData, ok := result["data"].(string); ok {
-		// 获取原始响应数据
-		wavData, err := base64.StdEncoding.DecodeString(audioData)
+	outputChan := make(chan []byte, 1000)
+	go func() {
+		resp, err := client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("解码音频数据失败: %v", err)
+			log.Errorf("豆包 HTTP TTS 请求失败: %v", err)
+			close(outputChan)
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= http.StatusBadRequest {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			log.Errorf("豆包 HTTP TTS 返回错误: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+			close(outputChan)
+			return
+		}
+		p.decodeStreamResponse(ctx, resp.Body, outputChan, sampleRate, frameDuration)
+	}()
+	return outputChan, nil
+}
+
+func (p *DoubaoTTSProvider) decodeStreamResponse(ctx context.Context, body io.Reader, outputChan chan []byte, sampleRate int, frameDuration int) {
+	pipeReader, pipeWriter := io.Pipe()
+	startTs := time.Now().UnixMilli()
+
+	decoder, err := util.CreateAudioDecoderWithSampleRate(ctx, pipeReader, outputChan, frameDuration, defaultDoubaoAudioFmt, sampleRate)
+	if err != nil {
+		log.Errorf("创建豆包音频解码器失败: %v", err)
+		_ = pipeReader.Close()
+		_ = pipeWriter.Close()
+		close(outputChan)
+		return
+	}
+	go func() {
+		if err := decoder.Run(startTs); err != nil {
+			log.Errorf("豆包音频解码失败: %v", err)
+		}
+	}()
+
+	reader := bufio.NewReader(body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			_ = pipeWriter.CloseWithError(err)
+			return
 		}
 
-		// 转换为Opus帧并直接返回
-		return util.WavToOpus(wavData, 0, 0, 0)
-	}
+		line = strings.TrimSpace(line)
+		if event, parseErr := parseDoubaoTTSStreamEvent([]byte(line)); parseErr != nil {
+			_ = pipeWriter.CloseWithError(parseErr)
+			return
+		} else if event != nil {
+			if writeErr := writeDoubaoTTSAudioChunk(pipeWriter, event); writeErr != nil {
+				_ = pipeWriter.CloseWithError(writeErr)
+				return
+			}
+		}
 
-	return nil, fmt.Errorf("响应中没有数据字段, 状态码: %d, 响应: %s", resp.StatusCode, string(body))
+		if err == io.EOF {
+			_ = pipeWriter.Close()
+			return
+		}
+	}
 }
 
-// GetVoiceInfo 获取语音信息
-func (p *DoubaoTTSProvider) GetVoiceInfo() map[string]interface{} {
-	return map[string]interface{}{
-		"voice": p.Voice,
-		"type":  "doubao",
+func parseDoubaoTTSStreamEvent(raw []byte) (*doubaoTTSV3Event, error) {
+	line := strings.TrimSpace(string(raw))
+	if line == "" {
+		return nil, nil
 	}
+	if strings.HasPrefix(line, "event:") {
+		return nil, nil
+	}
+	if strings.HasPrefix(line, "data:") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	}
+	if line == "" || line == "[DONE]" {
+		return nil, nil
+	}
+
+	var event doubaoTTSV3Event
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return nil, fmt.Errorf("解析豆包 TTS 流式事件失败: %w", err)
+	}
+	if event.Code != 0 {
+		msg := strings.TrimSpace(event.Message)
+		if msg == "" {
+			msg = fmt.Sprintf("豆包 TTS 返回错误码 %d", event.Code)
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	return &event, nil
 }
 
-// saveWavToTmp 将WAV数据保存到tmp目录
-func saveWavToTmp(wavData []byte) error {
-	// 确保tmp目录存在
-	tmpDir := "tmp"
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		return fmt.Errorf("创建tmp目录失败: %v", err)
+func writeDoubaoTTSAudioChunk(writer *io.PipeWriter, event *doubaoTTSV3Event) error {
+	chunk, err := decodeDoubaoTTSAudioChunk(event)
+	if err != nil {
+		return err
 	}
-
-	// 生成唯一文件名
-	timestamp := time.Now().Format("20060102_150405")
-	uuid := generateUUID()
-	filename := filepath.Join(tmpDir, fmt.Sprintf("wav_%s_%s.wav", timestamp, uuid[:8]))
-
-	// 写入文件
-	if err := os.WriteFile(filename, wavData, 0644); err != nil {
-		return fmt.Errorf("写入WAV文件失败: %v", err)
+	if len(chunk) == 0 {
+		return nil
 	}
+	_, err = writer.Write(chunk)
+	return err
+}
 
-	log.Infof("WAV文件已保存: %s", filename)
+func decodeDoubaoTTSAudioChunk(event *doubaoTTSV3Event) ([]byte, error) {
+	if event == nil || event.Data == nil || strings.TrimSpace(*event.Data) == "" {
+		return nil, nil
+	}
+	chunk, err := base64.StdEncoding.DecodeString(strings.TrimSpace(*event.Data))
+	if err != nil {
+		return nil, fmt.Errorf("解码豆包音频数据失败: %w", err)
+	}
+	return chunk, nil
+}
+
+func (p *DoubaoTTSProvider) SetVoice(voiceConfig map[string]interface{}) error {
+	if voice, ok := voiceConfig["voice"].(string); ok && strings.TrimSpace(voice) != "" {
+		p.Voice = strings.TrimSpace(voice)
+	}
+	if model, ok := voiceConfig["model"].(string); ok && strings.TrimSpace(model) != "" {
+		p.Model = normalizeDoubaoModel(model)
+	}
+	if resourceID, ok := voiceConfig["resource_id"].(string); ok {
+		p.ResourceID = strings.TrimSpace(resourceID)
+	}
 	return nil
 }
 
-func (p *DoubaoTTSProvider) TextToSpeechStream(ctx context.Context, text string, sampleRate int, channels int, frameDuration int) (outputChan chan []byte, err error) {
-	return nil, nil
-}
-
-// SetVoice 设置音色参数
-func (p *DoubaoTTSProvider) SetVoice(voiceConfig map[string]interface{}) error {
-	if voice, ok := voiceConfig["voice"].(string); ok && voice != "" {
-		p.Voice = voice
-		return nil
-	}
-	return fmt.Errorf("无效的音色配置: 缺少 voice")
-}
-
-// Close 关闭资源（无状态 Provider，无需关闭）
 func (p *DoubaoTTSProvider) Close() error {
 	return nil
 }
 
-// IsValid 检查资源是否有效
 func (p *DoubaoTTSProvider) IsValid() bool {
 	return p != nil
 }

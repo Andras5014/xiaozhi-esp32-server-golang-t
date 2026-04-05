@@ -9,543 +9,663 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
+	"xiaozhi-esp32-server-golang/internal/domain/doubaoapi"
 	"xiaozhi-esp32-server-golang/internal/util"
 	log "xiaozhi-esp32-server-golang/logger"
 
 	"github.com/gorilla/websocket"
 )
 
-// 枚举消息类型
-var (
-	enumMessageType = map[byte]string{
-		11: "audio-only server response",
-		12: "frontend server response",
-		15: "error message from server",
-	}
-	enumMessageTypeSpecificFlags = map[byte]string{
-		0: "no sequence number",
-		1: "sequence number > 0",
-		2: "last message from server (seq < 0)",
-		3: "sequence number < 0",
-	}
-	enumMessageSerializationMethods = map[byte]string{
-		0:  "no serialization",
-		1:  "JSON",
-		15: "custom type",
-	}
-	enumMessageCompression = map[byte]string{
-		0:  "no compression",
-		1:  "gzip",
-		15: "custom compression method",
-	}
-)
-
-// 常量定义
-const (
-	optQuery   string = "query"  // 一次性合成
-	optSubmit  string = "submit" // 流式合成
-	wsScheme   string = "wss"
-	wsPath     string = "/api/v1/tts/ws_binary"
-	headerSize int    = 4 // 默认头部大小(字节)
-)
-
-// 默认二进制协议头
-// version: b0001 (4 bits)
-// header size: b0001 (4 bits)
-// message type: b0001 (Full client request) (4bits)
-// message type specific flags: b0000 (none) (4bits)
-// message serialization method: b0001 (JSON) (4 bits)
-// message compression: b0001 (gzip) (4bits)
-// reserved data: 0x00 (1 byte)
-var defaultHeader = []byte{0x11, 0x10, 0x11, 0x00}
-
-// 全局WebSocket Dialer，配置更大的缓冲区以避免slice bounds out of range错误
 var wsDialer = websocket.Dialer{
-	ReadBufferSize:   16384, // 16KB 读取缓冲区
-	WriteBufferSize:  16384, // 16KB 写入缓冲区
+	ReadBufferSize:   16384,
+	WriteBufferSize:  16384,
 	HandshakeTimeout: 45 * time.Second,
 }
 
-// 合成响应结构
-type synResp struct {
-	Audio  []byte
-	IsLast bool
-}
+var doubaoWSRequestHeader = []byte{0x11, 0x10, 0x11, 0x00}
 
-// DoubaoWSProvider 读伴WebSocket TTS提供者
 type DoubaoWSProvider struct {
 	AppID       string
 	AccessToken string
-	Cluster     string
+	Model       string
+	ResourceID  string
 	Voice       string
-	WSHost      string
-	WSURL       *url.URL
-	Header      http.Header
-	UseStream   bool // 是否使用流式合成
-	// 音频片段处理回调函数，仅在流式模式下使用
-	OnAudioChunk func(chunkData []byte, isLast bool) error
-
-	// 连接管理
-	conn      *websocket.Conn
-	connMutex sync.RWMutex
-	// 发送锁，确保同一时间只有一个请求在使用连接
-	sendMutex sync.Mutex
+	WSURL       string
 }
 
-// NewDoubaoWSProvider 创建新的读伴WebSocket TTS提供者
+type doubaoWSAttemptResult struct {
+	outputChan chan []byte
+	err        error
+}
+
 func NewDoubaoWSProvider(config map[string]interface{}) *DoubaoWSProvider {
 	appID, _ := config["appid"].(string)
 	accessToken, _ := config["access_token"].(string)
-	cluster, _ := config["cluster"].(string)
+	model, _ := config["model"].(string)
+	resourceID, _ := config["resource_id"].(string)
 	voice, _ := config["voice"].(string)
-	wsHost, _ := config["ws_host"].(string)
-	useStream, _ := config["use_stream"].(bool)
-
-	// 如果没有指定WebSocket主机，使用默认值
-	if wsHost == "" {
-		wsHost = "openspeech.bytedance.com"
+	wsURL, _ := config["ws_url"].(string)
+	if strings.TrimSpace(wsURL) == "" {
+		if wsHost, ok := config["ws_host"].(string); ok && strings.TrimSpace(wsHost) != "" {
+			host := strings.TrimSpace(wsHost)
+			if !strings.Contains(host, "://") {
+				wsURL = "wss://" + strings.TrimLeft(host, "/")
+			} else {
+				wsURL = host
+			}
+			wsURL = strings.TrimRight(wsURL, "/") + "/api/v3/tts/unidirectional/stream"
+		}
 	}
-
-	// 构建WebSocket URL
-	wsURL := url.URL{Scheme: wsScheme, Host: wsHost, Path: wsPath}
-
-	// 检查令牌
-	if accessToken == "" {
-		log.Error("TTS WebSocket 访问令牌不能为空")
-	}
-
-	// 创建HTTP头
-	header := http.Header{}
-	header.Add("Authorization", fmt.Sprintf("Bearer;%s", accessToken))
-
 	return &DoubaoWSProvider{
 		AppID:       appID,
 		AccessToken: accessToken,
-		Cluster:     cluster,
-		Voice:       voice,
-		WSHost:      wsHost,
-		WSURL:       &wsURL,
-		Header:      header,
-		UseStream:   useStream,
+		Model:       normalizeDoubaoModel(model),
+		ResourceID:  strings.TrimSpace(resourceID),
+		Voice:       strings.TrimSpace(voice),
+		WSURL:       normalizeDoubaoWSURL(wsURL),
 	}
+}
+
+func normalizeDoubaoWSURL(raw string) string {
+	wsURL := normalizeDoubaoTTSURL(raw, defaultDoubaoWSURL)
+	wsURL = strings.TrimSpace(wsURL)
+	if strings.HasSuffix(wsURL, "/api/v3/tts/unidirectional") {
+		return wsURL + "/stream"
+	}
+	return wsURL
 }
 
 func (p *DoubaoWSProvider) TextToSpeech(ctx context.Context, text string, sampleRate int, channels int, frameDuration int) ([][]byte, error) {
-	return nil, nil
+	outputChan, err := p.TextToSpeechStream(ctx, text, sampleRate, channels, frameDuration)
+	if err != nil {
+		return nil, err
+	}
+	frames := make([][]byte, 0, 32)
+	for frame := range outputChan {
+		if len(frame) > 0 {
+			frames = append(frames, frame)
+		}
+	}
+	if len(frames) == 0 {
+		return nil, fmt.Errorf("豆包 WebSocket TTS 返回音频为空")
+	}
+	return frames, nil
 }
 
-// TextToSpeech 将文本转换为语音，返回音频帧数据和错误
-func (p *DoubaoWSProvider) TextToSpeechStream(ctx context.Context, text string, sampleRate int, channels int, frameDuration int) (outputOpusChan chan []byte, err error) {
+func (p *DoubaoWSProvider) TextToSpeechStream(ctx context.Context, text string, sampleRate int, channels int, frameDuration int) (chan []byte, error) {
+	voice := strings.TrimSpace(p.Voice)
+	if voice == "" {
+		return nil, fmt.Errorf("豆包 WebSocket TTS 缺少 voice")
+	}
 	if strings.TrimSpace(text) == "" {
 		return nil, nil
 	}
-
-	var operation string
-	if p.UseStream {
-		operation = optSubmit // 流式合成
-	} else {
-		operation = optQuery // 一次性合成
-	}
-
-	startTs := time.Now().UnixMilli()
-
-	// 准备请求数据
-	input := p.setupInput(text, p.Voice, operation, sampleRate, channels, frameDuration)
-
-	// 使用发送锁保护，确保同一时间只有一个请求在使用连接
-	p.sendMutex.Lock()
-	// 注意：不在函数返回时释放锁，而是在 goroutine 完成时释放
-
-	// 获取连接（复用或创建）
-	conn, err := p.getConnection(ctx)
+	derivedResolved, err := resolveDoubaoTTSModel(p.Model, voice)
 	if err != nil {
-		p.sendMutex.Unlock() // 获取连接失败时立即释放锁
-		return nil, fmt.Errorf("获取WebSocket连接失败: %v", err)
+		return nil, err
+	}
+	explicitResourceID := strings.TrimSpace(p.ResourceID)
+	if sampleRate <= 0 {
+		sampleRate = defaultDoubaoSampleHz
+	}
+	tryResolved := buildDoubaoWSAttemptModels(derivedResolved, explicitResourceID, voice)
+	attemptedResources := make([]string, 0, len(tryResolved))
+	attemptErrors := make([]error, 0, len(tryResolved))
+
+	for idx, candidate := range tryResolved {
+		attemptedResources = append(attemptedResources, candidate.ResourceID)
+
+		outputChan, attemptErr := p.textToSpeechStreamWithModel(ctx, text, sampleRate, frameDuration, candidate)
+		if attemptErr == nil {
+			return outputChan, nil
+		}
+		attemptErrors = append(attemptErrors, attemptErr)
+		if idx == len(tryResolved)-1 || !isDoubaoRetryableResourceError(attemptErr) {
+			return nil, summarizeDoubaoWSAttemptError(voice, tryResolved[0], attemptedResources, attemptErrors)
+		}
+		log.Warnf("豆包 WebSocket TTS 资源族不匹配，尝试切换重试: voice=%s from=%s to=%s", voice, candidate.ResourceID, tryResolved[idx+1].ResourceID)
 	}
 
-	// 压缩输入
-	compressedInput := gzipCompress(input)
-	payloadSize := len(compressedInput)
+	return nil, fmt.Errorf("豆包 WebSocket TTS 未找到可用的资源族")
+}
 
-	// 准备payload大小数据
-	payloadArr := make([]byte, 4)
-	binary.BigEndian.PutUint32(payloadArr, uint32(payloadSize))
-
-	// 组装完整的请求
-	clientRequest := make([]byte, len(defaultHeader))
-	copy(clientRequest, defaultHeader)
-	clientRequest = append(clientRequest, payloadArr...)
-	clientRequest = append(clientRequest, compressedInput...)
-
-	// 发送请求（使用受保护的写入方法）
-	err = p.writeMessage(conn, websocket.BinaryMessage, clientRequest)
+func (p *DoubaoWSProvider) textToSpeechStreamWithModel(ctx context.Context, text string, sampleRate int, frameDuration int, resolved resolvedTTSModel) (chan []byte, error) {
+	voice := strings.TrimSpace(p.Voice)
+	reqBody := newDoubaoWSPayload(text, voice, sampleRate, resolved.RequestModel)
+	requestFrame, err := buildDoubaoWSBinaryRequest(reqBody)
 	if err != nil {
-		// 发送失败，清空连接，下次使用时自动重连
-		log.Errorf("发送WebSocket消息失败: %v，清空连接", err)
-		p.clearConnection()
-		p.sendMutex.Unlock() // 发送失败时立即释放锁
-		return nil, fmt.Errorf("发送WebSocket消息失败: %v", err)
+		return nil, fmt.Errorf("构建豆包 WebSocket TTS 请求失败: %w", err)
 	}
 
-	// 设置读取超时
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	headers := doubaoapi.NewTTSWebsocketHeaders(p.AppID, p.AccessToken, resolved.ResourceID, doubaoapi.NewConnectID())
+	conn, resp, err := wsDialer.DialContext(ctx, p.WSURL, headers)
+	if err != nil {
+		return nil, formatDoubaoWSConnectError(err, resp)
+	}
 
+	outputChan := make(chan []byte, 1000)
 	pipeReader, pipeWriter := io.Pipe()
-
-	outputOpusChan = make(chan []byte, 1000)
-
-	// 启动解码器 goroutine
-	go func() {
-		mp3Decoder, err := util.CreateAudioDecoder(ctx, pipeReader, outputOpusChan, frameDuration, "mp3")
-		if err != nil {
-			log.Errorf("创建MP3解码器失败: %v", err)
-			close(outputOpusChan)
-			return
-		}
-		err = mp3Decoder.Run(startTs)
-		if err != nil {
-			log.Errorf("MP3解码器运行失败: %v", err)
-			return
-		}
-	}()
-
-	// 使用 WaitGroup 等待读取 goroutine 完成
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	// 启动读取 goroutine；锁在此 goroutine 内统一由 defer 释放，确保无论正常结束、错误或 panic 都会释放
-	go func() {
-		defer wg.Done()
-		defer p.sendMutex.Unlock()
-		defer func() {
-			pipeWriter.Close()
-		}()
-		// 流式合成
-		chunkCount := 0
-		//var allAudio []byte
-		for {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				log.Errorf("读取WebSocket消息失败: %v，清空连接", err)
-				// 连接断开，清空连接，下次使用时自动重连
-				p.clearConnection()
-				return
-			}
-
-			resp, err := parseResponse(message)
-			if err != nil {
-				// 解析失败时必须清连接，避免当前连接残留响应污染下一次TTS请求
-				log.Errorf("解析响应失败: %v，清空连接", err)
-				p.clearConnection()
-				return
-			}
-
-			select {
-			case <-ctx.Done():
-				if resp.IsLast {
-					log.Debugf("DoubaoWs TextToSpeechStream context done, already read all data, exit")
-					return
-				} else {
-					log.Debugf("DoubaoWs TextToSpeechStream context done, need to read more data, continue")
-					continue
-				}
-			default:
-			}
-
-			if len(resp.Audio) > 0 {
-				chunkCount++
-				// 存储用于最终返回
-				//allAudio = append(allAudio, resp.Audio...)
-				if _, err := pipeWriter.Write(resp.Audio); err != nil {
-					log.Errorf("写入音频管道失败: %v，清空连接", err)
-					p.clearConnection()
-					return
-				}
-			}
-
-			if resp.IsLast {
-				log.Debugf("收到最后一个音频片段，共%d个片段", chunkCount)
-				//将allAudio写到文件中
-				//saveAudioToTmp(allAudio, "mp3")
-				return
-			}
-
-			// 重置读取超时
-			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-		}
-	}()
-
-	return outputOpusChan, nil
-}
-
-// GetVoiceInfo 获取语音信息
-func (p *DoubaoWSProvider) GetVoiceInfo() map[string]interface{} {
-	return map[string]interface{}{
-		"voice": p.Voice,
-		"type":  "doubao_ws",
-	}
-}
-
-// getConnection 获取连接，如果不存在则创建
-func (p *DoubaoWSProvider) getConnection(ctx context.Context) (*websocket.Conn, error) {
-	// 先尝试读取现有连接
-	p.connMutex.RLock()
-	conn := p.conn
-	p.connMutex.RUnlock()
-
-	if conn != nil {
-		return conn, nil
-	}
-
-	// 需要创建新连接
-	p.connMutex.Lock()
-	defer p.connMutex.Unlock()
-
-	// 双重检查，可能其他 goroutine 已经创建了连接
-	if p.conn != nil {
-		return p.conn, nil
-	}
-
-	// 创建新连接
-	conn, _, err := wsDialer.DialContext(ctx, p.WSURL.String(), p.Header)
+	attemptResult := make(chan doubaoWSAttemptResult, 1)
+	startTs := time.Now().UnixMilli()
+	decoder, err := util.CreateAudioDecoderWithSampleRate(ctx, pipeReader, outputChan, frameDuration, defaultDoubaoAudioFmt, sampleRate)
 	if err != nil {
-		return nil, fmt.Errorf("WebSocket连接失败: %v", err)
+		_ = conn.Close()
+		_ = pipeReader.Close()
+		_ = pipeWriter.Close()
+		close(outputChan)
+		return nil, fmt.Errorf("创建豆包 WebSocket 音频解码器失败: %w", err)
 	}
+	go func() {
+		if err := decoder.Run(startTs); err != nil {
+			log.Errorf("豆包 WebSocket 音频解码失败: %v", err)
+		}
+	}()
 
-	// 设置消息读取限制，防止过大的消息
-	conn.SetReadLimit(1024 * 1024) // 1MB 最大消息大小
+	go func() {
+		defer conn.Close()
+		defer pipeWriter.Close()
 
-	// 设置保持连接
-	conn.SetPingHandler(func(appData string) error {
-		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(1*time.Second))
-	})
-
-	p.conn = conn
-	log.Infof("WebSocket 连接已建立")
-	return conn, nil
-}
-
-// clearConnection 清空连接（用于断线重连）
-func (p *DoubaoWSProvider) clearConnection() {
-	p.connMutex.Lock()
-	defer p.connMutex.Unlock()
-
-	if p.conn != nil {
-		p.conn.Close()
-		p.conn = nil
-		log.Infof("WebSocket 连接已清空，等待下次重连")
-	}
-}
-
-// writeMessage 安全地向 WebSocket 连接写入消息
-func (p *DoubaoWSProvider) writeMessage(conn *websocket.Conn, messageType int, data []byte) error {
-	// 使用读锁保护连接写入操作，防止并发写入导致数据混乱
-	p.connMutex.RLock()
-	defer p.connMutex.RUnlock()
-
-	// 检查连接是否有效
-	if conn == nil {
-		return fmt.Errorf("连接已关闭")
-	}
-
-	return conn.WriteMessage(messageType, data)
-}
-
-// 设置请求输入
-func (p *DoubaoWSProvider) setupInput(text, voiceType, opt string, sampleRate int, channels int, frameDuration int) []byte {
-	// 生成请求ID
-	reqID := generateUUID()
-
-	// 构建请求参数
-	params := make(map[string]map[string]interface{})
-
-	// 应用信息
-	params["app"] = make(map[string]interface{})
-	params["app"]["appid"] = p.AppID
-	params["app"]["token"] = p.AccessToken
-	params["app"]["cluster"] = p.Cluster
-
-	// 用户信息
-	params["user"] = make(map[string]interface{})
-	params["user"]["uid"] = "uid"
-
-	// 音频参数
-	params["audio"] = make(map[string]interface{})
-	params["audio"]["voice_type"] = voiceType
-	params["audio"]["encoding"] = "mp3"
-	params["audio"]["rate"] = sampleRate
-	params["audio"]["speed_ratio"] = 1.0
-	params["audio"]["volume_ratio"] = 1.0
-	params["audio"]["pitch_ratio"] = 1.0
-
-	// 请求信息
-	params["request"] = make(map[string]interface{})
-	params["request"]["reqid"] = reqID
-	params["request"]["text"] = text
-	params["request"]["text_type"] = "plain"
-	params["request"]["operation"] = opt
-
-	// 序列化为JSON
-	resBytes, _ := json.Marshal(params)
-	return resBytes
-}
-
-// gzip压缩
-func gzipCompress(input []byte) []byte {
-	var b bytes.Buffer
-	w := gzip.NewWriter(&b)
-	w.Write(input)
-	w.Close()
-	return b.Bytes()
-}
-
-// gzip解压缩
-func gzipDecompress(input []byte) []byte {
-	b := bytes.NewBuffer(input)
-	r, _ := gzip.NewReader(b)
-	out, _ := io.ReadAll(r)
-	r.Close()
-	return out
-}
-
-// 解析WebSocket响应
-func parseResponse(res []byte) (resp synResp, err error) {
-	// 解析头部
-	protoVersion := res[0] >> 4
-	headSizeByte := res[0] & 0x0f
-	messageType := res[1] >> 4
-	messageTypeSpecificFlags := res[1] & 0x0f
-	serializationMethod := res[2] >> 4
-	messageCompression := res[2] & 0x0f
-
-	_ = protoVersion
-	_ = serializationMethod
-	/*
-		log.Debugf("协议版本: %x - 版本 %d\n", protoVersion, protoVersion)
-		log.Debugf("头部大小: %x - %d 字节\n", headSizeByte, headSizeByte*4)
-		log.Debugf("消息类型: %x - %s\n", messageType, enumMessageType[messageType])
-		log.Debugf("消息类型特定标志: %x - %s\n", messageTypeSpecificFlags, enumMessageTypeSpecificFlags[messageTypeSpecificFlags])
-		log.Debugf("消息序列化方法: %x - %s\n", serializationMethod, enumMessageSerializationMethods[serializationMethod])
-		log.Debugf("消息压缩: %x - %s\n", messageCompression, enumMessageCompression[messageCompression])
-	*/
-
-	// 计算头部大小（以字节为单位）
-	headSizeBytes := int(headSizeByte) * 4
-
-	// 分离payload
-	payload := res[headSizeBytes:]
-
-	// 根据消息类型处理
-	if messageType == 0xb { // audio-only server response (11)
-		// 检查是否有序列号
-		if messageTypeSpecificFlags == 0 {
-			// 无序列号，空payload
+		if err := conn.WriteMessage(websocket.BinaryMessage, requestFrame); err != nil {
+			trySendDoubaoWSAttemptResult(attemptResult, doubaoWSAttemptResult{err: fmt.Errorf("发送豆包 WebSocket TTS 请求失败: %w", err)})
+			_ = pipeWriter.CloseWithError(fmt.Errorf("发送豆包 WebSocket TTS 请求失败: %w", err))
 			return
-		} else {
-			// 有序列号，提取payload
-			sequenceNumber := int32(binary.BigEndian.Uint32(payload[0:4]))
-			payloadSize := int32(binary.BigEndian.Uint32(payload[4:8]))
-			payload = payload[8:]
+		}
 
-			_ = payloadSize
-			//log.Debugf("序列号: %d", sequenceNumber)
-			//log.Debugf("Payload大小: %d", payloadSize)
-
-			resp.Audio = append(resp.Audio, payload...)
-
-			// 检查是否为最后一个包
-			if sequenceNumber < 0 {
-				resp.IsLast = true
+		audioReceived := false
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					if !audioReceived {
+						trySendDoubaoWSAttemptResult(attemptResult, doubaoWSAttemptResult{err: fmt.Errorf("豆包 WebSocket TTS 连接已关闭但未收到音频")})
+					}
+					return
+				}
+				trySendDoubaoWSAttemptResult(attemptResult, doubaoWSAttemptResult{err: fmt.Errorf("读取豆包 WebSocket TTS 响应失败: %w", err)})
+				_ = pipeWriter.CloseWithError(fmt.Errorf("读取豆包 WebSocket TTS 响应失败: %w", err))
+				return
+			}
+			if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
+				continue
+			}
+			log.Debugf("豆包 WebSocket TTS 收到消息: ws_type=%d payload_len=%d", messageType, len(payload))
+			audioChunk, isLast, err := parseDoubaoWSMessage(messageType, payload)
+			if err != nil {
+				trySendDoubaoWSAttemptResult(attemptResult, doubaoWSAttemptResult{err: err})
+				_ = pipeWriter.CloseWithError(err)
+				return
+			}
+			if len(audioChunk) > 0 {
+				if !audioReceived {
+					audioReceived = true
+					trySendDoubaoWSAttemptResult(attemptResult, doubaoWSAttemptResult{outputChan: outputChan})
+				}
+				if _, err := pipeWriter.Write(audioChunk); err != nil {
+					trySendDoubaoWSAttemptResult(attemptResult, doubaoWSAttemptResult{err: err})
+					_ = pipeWriter.CloseWithError(err)
+					return
+				}
+			}
+			if isLast {
+				if !audioReceived {
+					trySendDoubaoWSAttemptResult(attemptResult, doubaoWSAttemptResult{err: fmt.Errorf("豆包 WebSocket TTS 未收到有效音频")})
+				}
+				return
 			}
 		}
-	} else if messageType == 0xf { // error message (15)
-		// 解析错误信息
-		code := int32(binary.BigEndian.Uint32(payload[0:4]))
-		errMsg := payload[8:] // 错误消息从第8个字节开始
+	}()
 
-		// 如果是压缩的，解压缩
-		if messageCompression == 1 {
-			errMsg = gzipDecompress(errMsg)
+	select {
+	case result := <-attemptResult:
+		if result.err != nil {
+			return nil, result.err
 		}
-
-		log.Errorf("服务端错误 (代码: %d): %s", code, string(errMsg))
-		err = fmt.Errorf("服务端错误 (代码: %d): %s", code, string(errMsg))
-		return
-	} else if messageType == 0xc { // frontend server response (12)
-		// 解析前端消息
-		msgSize := int32(binary.BigEndian.Uint32(payload[0:4]))
-		payload = payload[4:]
-
-		// 如果是压缩的，解压缩
-		if messageCompression == 1 {
-			payload = gzipDecompress(payload)
-		}
-
-		// 记录前端消息
-		if os.Getenv("DEBUG") == "1" {
-			log.Debugf("前端消息大小: %d", msgSize)
-			log.Debugf("前端消息内容: %s", string(payload))
-		}
-	} else {
-		// 未知消息类型
-		log.Warnf("未知消息类型: %d", messageType)
-		err = fmt.Errorf("未知消息类型: %d", messageType)
-		return
+		return result.outputChan, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-
-	return
 }
 
-// saveAudioToTmp 将音频数据保存到tmp目录
-func saveAudioToTmp(audioData []byte, format string) error {
-	// 确保tmp目录存在
-	tmpDir := "tmp"
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		return fmt.Errorf("创建tmp目录失败: %v", err)
+func trySendDoubaoWSAttemptResult(ch chan doubaoWSAttemptResult, result doubaoWSAttemptResult) {
+	select {
+	case ch <- result:
+	default:
 	}
+}
 
-	// 生成唯一文件名
-	timestamp := time.Now().Format("20060102_150405")
-	uuid := generateUUID()
-	filename := filepath.Join(tmpDir, fmt.Sprintf("audio_%s_%s.%s", timestamp, uuid[:8], format))
-
-	// 写入文件
-	if err := os.WriteFile(filename, audioData, 0644); err != nil {
-		return fmt.Errorf("写入音频文件失败: %v", err)
+func (p *DoubaoWSProvider) SetVoice(voiceConfig map[string]interface{}) error {
+	if voice, ok := voiceConfig["voice"].(string); ok && strings.TrimSpace(voice) != "" {
+		p.Voice = strings.TrimSpace(voice)
 	}
-
-	log.Debugf("音频文件已保存: %s", filename)
+	if model, ok := voiceConfig["model"].(string); ok && strings.TrimSpace(model) != "" {
+		p.Model = normalizeDoubaoModel(model)
+	}
+	if resourceID, ok := voiceConfig["resource_id"].(string); ok {
+		p.ResourceID = strings.TrimSpace(resourceID)
+	}
 	return nil
 }
 
-// SetVoice 设置音色参数
-func (p *DoubaoWSProvider) SetVoice(voiceConfig map[string]interface{}) error {
-	if voice, ok := voiceConfig["voice"].(string); ok && voice != "" {
-		p.Voice = voice
+func (p *DoubaoWSProvider) Close() error {
+	return nil
+}
+
+func (p *DoubaoWSProvider) IsValid() bool {
+	return p != nil
+}
+
+func newDoubaoWSPayload(text, speaker string, sampleRate int, requestModel string) doubaoTTSV3Request {
+	return newDoubaoTTSV3Request(text, speaker, sampleRate, requestModel)
+}
+
+func buildDoubaoWSBinaryRequest(req any) ([]byte, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("序列化豆包 WebSocket TTS 请求失败: %w", err)
+	}
+	compressed, err := gzipCompressDoubao(payload)
+	if err != nil {
+		return nil, fmt.Errorf("压缩豆包 WebSocket TTS 请求失败: %w", err)
+	}
+
+	sizeBuf := make([]byte, 4)
+	binary.BigEndian.PutUint32(sizeBuf, uint32(len(compressed)))
+
+	frame := make([]byte, 0, len(doubaoWSRequestHeader)+len(sizeBuf)+len(compressed))
+	frame = append(frame, doubaoWSRequestHeader...)
+	frame = append(frame, sizeBuf...)
+	frame = append(frame, compressed...)
+	return frame, nil
+}
+
+func parseDoubaoWSMessage(messageType int, payload []byte) ([]byte, bool, error) {
+	if len(payload) == 0 {
+		return nil, false, nil
+	}
+
+	if looksLikeJSONPayload(payload) {
+		var directErr map[string]any
+		if err := json.Unmarshal(payload, &directErr); err == nil {
+			if errMsg, ok := directErr["error"].(string); ok && strings.TrimSpace(errMsg) != "" {
+				return nil, false, fmt.Errorf("%s", strings.TrimSpace(errMsg))
+			}
+		}
+	}
+
+	if messageType == websocket.TextMessage || looksLikeJSONPayload(payload) {
+		event, err := parseDoubaoTTSStreamEvent(payload)
+		if err != nil || event == nil {
+			return nil, false, err
+		}
+		chunk, err := decodeDoubaoTTSAudioChunk(event)
+		if err != nil {
+			return nil, false, err
+		}
+		return chunk, event.Sequence < 0, nil
+	}
+
+	return parseDoubaoWSBinaryResponse(payload)
+}
+
+func parseDoubaoWSBinaryResponse(frame []byte) ([]byte, bool, error) {
+	if len(frame) < 4 {
+		return nil, false, fmt.Errorf("解析豆包 WebSocket TTS 响应失败: 响应帧长度不足")
+	}
+
+	headerSizeBytes := int(frame[0]&0x0f) * 4
+	if headerSizeBytes <= 0 || len(frame) < headerSizeBytes {
+		return nil, false, fmt.Errorf("解析豆包 WebSocket TTS 响应失败: 非法头部长度")
+	}
+
+	messageType := frame[1] >> 4
+	flags := frame[1] & 0x0f
+	compression := frame[2] & 0x0f
+	payload := frame[headerSizeBytes:]
+
+	switch messageType {
+	case 0x09:
+		log.Debugf("豆包 WebSocket TTS 收到 full server response: flags=%d compression=%d payload_len=%d", flags, compression, len(payload))
+		return parseDoubaoWSFullServerResponse(payload, compression, flags)
+	case 0x0b:
+		log.Debugf("豆包 WebSocket TTS 收到 audio-only response: flags=%d payload_len=%d", flags, len(payload))
+		if flags == 0 {
+			return nil, false, nil
+		}
+		if flags == 4 {
+			_, requestID, audio, err := extractDoubaoWSFlag4Payload(payload)
+			if err != nil {
+				return nil, false, err
+			}
+			log.Debugf("豆包 WebSocket 音频帧(request_id=%s): audio_len=%d", requestID, len(audio))
+			return audio, false, nil
+		}
+		if len(payload) < 8 {
+			return nil, false, fmt.Errorf("解析豆包 WebSocket 音频帧失败: payload 长度不足")
+		}
+		sequenceNumber := int32(binary.BigEndian.Uint32(payload[0:4]))
+		payloadSize := int(binary.BigEndian.Uint32(payload[4:8]))
+		audio := payload[8:]
+		if payloadSize >= 0 && payloadSize < len(audio) {
+			audio = audio[:payloadSize]
+		}
+		return audio, sequenceNumber < 0, nil
+	case 0x0c:
+		if len(payload) < 4 {
+			return nil, false, fmt.Errorf("解析豆包 WebSocket 前端消息失败: payload 长度不足")
+		}
+		msgPayload := payload[4:]
+		if compression == 1 {
+			var err error
+			msgPayload, err = gzipDecompressDoubao(msgPayload)
+			if err != nil {
+				return nil, false, fmt.Errorf("解压豆包 WebSocket 前端消息失败: %w", err)
+			}
+		}
+		if !looksLikeJSONPayload(msgPayload) {
+			return nil, false, nil
+		}
+		event, err := parseDoubaoTTSStreamEvent(msgPayload)
+		if err != nil || event == nil {
+			return nil, false, err
+		}
+		chunk, err := decodeDoubaoTTSAudioChunk(event)
+		if err != nil {
+			return nil, false, err
+		}
+		return chunk, event.Sequence < 0, nil
+	case 0x0f:
+		if len(payload) < 8 {
+			return nil, false, fmt.Errorf("解析豆包 WebSocket 错误帧失败: payload 长度不足")
+		}
+		code := int32(binary.BigEndian.Uint32(payload[0:4]))
+		errPayload := payload[8:]
+		if compression == 1 {
+			var err error
+			errPayload, err = gzipDecompressDoubao(errPayload)
+			if err != nil {
+				return nil, false, fmt.Errorf("解压豆包 WebSocket 错误帧失败: %w", err)
+			}
+		}
+		msg := strings.TrimSpace(string(errPayload))
+		if msg == "" {
+			msg = fmt.Sprintf("豆包 WebSocket TTS 服务端错误(code=%d)", code)
+		}
+		return nil, false, fmt.Errorf("%s", msg)
+	default:
+		preview := frame
+		if len(preview) > 16 {
+			preview = preview[:16]
+		}
+		return nil, false, fmt.Errorf("解析豆包 WebSocket TTS 响应失败: 未知消息类型 %d, 首包=%x", messageType, preview)
+	}
+}
+
+func parseDoubaoWSFullServerResponse(payload []byte, compression byte, flags byte) ([]byte, bool, error) {
+	if flags == 4 {
+		marker, requestID, body, err := extractDoubaoWSFlag4Payload(payload)
+		if err != nil {
+			return nil, false, err
+		}
+		trimmed := bytes.TrimSpace(body)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}")) {
+			log.Debugf("豆包 WebSocket ACK(request_id=%s) 结束标记: marker=%d body=%q", requestID, marker, string(trimmed))
+			return nil, true, nil
+		}
+		if !looksLikeJSONPayload(trimmed) {
+			log.Debugf("豆包 WebSocket ACK(request_id=%s) 非JSON payload: marker=%d body=%x", requestID, marker, trimmed)
+			return nil, false, nil
+		}
+
+		var event doubaoTTSV3Event
+		if err := json.Unmarshal(trimmed, &event); err == nil && (event.Code != 0 || event.Message != "" || event.Data != nil) {
+			if event.Code != 0 {
+				msg := strings.TrimSpace(event.Message)
+				if msg == "" {
+					msg = fmt.Sprintf("豆包 WebSocket TTS 返回错误码 %d", event.Code)
+				}
+				return nil, false, fmt.Errorf("%s", msg)
+			}
+			chunk, err := decodeDoubaoTTSAudioChunk(&event)
+			if err != nil {
+				return nil, false, err
+			}
+			return chunk, event.Sequence < 0, nil
+		}
+
+		log.Debugf("豆包 WebSocket ACK(request_id=%s) 元数据: marker=%d body=%s", requestID, marker, string(trimmed))
+		return nil, false, nil
+	}
+
+	if len(payload) < 8 {
+		return nil, false, fmt.Errorf("解析豆包 WebSocket ACK 帧失败: payload 长度不足")
+	}
+
+	sequenceNumber := int32(binary.BigEndian.Uint32(payload[0:4]))
+	payloadSize := int(binary.BigEndian.Uint32(payload[4:8]))
+	body := payload[8:]
+	if payloadSize >= 0 && payloadSize < len(body) {
+		body = body[:payloadSize]
+	}
+	if compression == 1 {
+		var err error
+		body, err = gzipDecompressDoubao(body)
+		if err != nil {
+			return nil, false, fmt.Errorf("解压豆包 WebSocket ACK 帧失败: %w", err)
+		}
+	}
+	if !looksLikeJSONPayload(body) {
+		log.Debugf("豆包 WebSocket ACK 非JSON payload: %x", body)
+		return nil, sequenceNumber < 0, nil
+	}
+
+	var event doubaoTTSV3Event
+	if err := json.Unmarshal(body, &event); err != nil {
+		return nil, false, fmt.Errorf("解析豆包 WebSocket ACK JSON 失败: %w", err)
+	}
+	log.Debugf("豆包 WebSocket ACK JSON: code=%d sequence=%d message=%q", event.Code, event.Sequence, event.Message)
+	if event.Code != 0 {
+		msg := strings.TrimSpace(event.Message)
+		if msg == "" {
+			msg = fmt.Sprintf("豆包 WebSocket TTS 返回错误码 %d", event.Code)
+		}
+		return nil, false, fmt.Errorf("%s", msg)
+	}
+	chunk, err := decodeDoubaoTTSAudioChunk(&event)
+	if err != nil {
+		return nil, false, err
+	}
+	return chunk, event.Sequence < 0 || sequenceNumber < 0, nil
+}
+
+func extractDoubaoWSFlag4Payload(payload []byte) (int32, string, []byte, error) {
+	if len(payload) < 12 {
+		return 0, "", nil, fmt.Errorf("解析豆包 WebSocket flags=4 帧失败: payload 长度不足")
+	}
+	marker := int32(binary.BigEndian.Uint32(payload[0:4]))
+	requestIDLen := int(binary.BigEndian.Uint32(payload[4:8]))
+	if requestIDLen < 0 || len(payload) < 8+requestIDLen+4 {
+		return 0, "", nil, fmt.Errorf("解析豆包 WebSocket flags=4 帧失败: request_id 长度非法")
+	}
+	requestID := string(payload[8 : 8+requestIDLen])
+	bodyLenOffset := 8 + requestIDLen
+	bodyLen := int(binary.BigEndian.Uint32(payload[bodyLenOffset : bodyLenOffset+4]))
+	body := payload[bodyLenOffset+4:]
+	if bodyLen >= 0 && bodyLen <= len(body) {
+		body = body[:bodyLen]
+	}
+	return marker, requestID, body, nil
+}
+
+func buildDoubaoPublicFallbackModel(resolved resolvedTTSModel, voice string) *resolvedTTSModel {
+	if isDoubaoCloneVoice(voice) {
 		return nil
 	}
-	return fmt.Errorf("无效的音色配置: 缺少 voice")
+	switch resolved.ResourceID {
+	case resourceSeedTTS10:
+		fallback := resolvedTTSModel{
+			ConfigModel:  modelSeedTTS20Standard,
+			RequestModel: modelSeedTTS20Standard,
+			ResourceID:   resourceSeedTTS20,
+			VoiceFamily:  resolved.VoiceFamily,
+		}
+		return &fallback
+	case resourceSeedTTS20:
+		fallback := resolvedTTSModel{
+			ConfigModel:  modelSeedTTS11,
+			RequestModel: modelSeedTTS11,
+			ResourceID:   resourceSeedTTS10,
+			VoiceFamily:  resolved.VoiceFamily,
+		}
+		return &fallback
+	default:
+		return nil
+	}
 }
 
-// Close 关闭资源，释放连接
-func (p *DoubaoWSProvider) Close() error {
-	p.clearConnection()
-	return nil
+func buildDoubaoWSAttemptModels(derived resolvedTTSModel, explicitResourceID, voice string) []resolvedTTSModel {
+	models := make([]resolvedTTSModel, 0, 3)
+	seen := map[string]struct{}{}
+	push := func(candidate resolvedTTSModel) {
+		key := candidate.ResourceID + "|" + candidate.RequestModel
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		models = append(models, candidate)
+	}
+
+	if explicit := strings.TrimSpace(explicitResourceID); explicit != "" {
+		override := derived
+		override.ResourceID = explicit
+		push(override)
+	}
+	push(derived)
+	if fallback := buildDoubaoPublicFallbackModel(derived, voice); fallback != nil {
+		push(*fallback)
+	}
+	return models
 }
 
-// IsValid 检查资源是否有效
-func (p *DoubaoWSProvider) IsValid() bool {
-	p.connMutex.RLock()
-	conn := p.conn
-	p.connMutex.RUnlock()
+func formatDoubaoWSConnectError(err error, resp *http.Response) error {
+	if resp == nil {
+		return fmt.Errorf("建立豆包 WebSocket TTS 连接失败: %w", err)
+	}
+	defer resp.Body.Close()
 
-	// 检查连接是否存在
-	return conn != nil
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	bodyText := strings.TrimSpace(string(body))
+	if readErr != nil && bodyText == "" {
+		return fmt.Errorf("建立豆包 WebSocket TTS 连接失败: websocket handshake status=%d", resp.StatusCode)
+	}
+	if bodyText != "" {
+		return fmt.Errorf("建立豆包 WebSocket TTS 连接失败: websocket handshake status=%d body=%s", resp.StatusCode, bodyText)
+	}
+	return fmt.Errorf("建立豆包 WebSocket TTS 连接失败: websocket handshake status=%d", resp.StatusCode)
+}
+
+func isDoubaoResourceMismatchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "resource id is mismatched with speaker related resource")
+}
+
+func isDoubaoResourceNotGrantedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "requested resource not granted")
+}
+
+func isDoubaoRetryableResourceError(err error) bool {
+	return isDoubaoResourceMismatchError(err) || isDoubaoResourceNotGrantedError(err)
+}
+
+func summarizeDoubaoWSAttemptError(voice string, preferred resolvedTTSModel, attemptedResources []string, attemptErrors []error) error {
+	if len(attemptErrors) == 0 {
+		return nil
+	}
+
+	lastErr := attemptErrors[len(attemptErrors)-1]
+	hasMismatch := false
+	hasNotGranted := false
+	for _, attemptErr := range attemptErrors {
+		hasMismatch = hasMismatch || isDoubaoResourceMismatchError(attemptErr)
+		hasNotGranted = hasNotGranted || isDoubaoResourceNotGrantedError(attemptErr)
+	}
+
+	retryInfo := ""
+	if len(attemptedResources) > 0 {
+		retryInfo = fmt.Sprintf("，已尝试 resource_id=%s", strings.Join(attemptedResources, ","))
+	}
+
+	if hasNotGranted && hasMismatch {
+		return fmt.Errorf(
+			"豆包 WebSocket TTS 配置不可用: voice=%s, model=%s, resource_id=%s%s。当前显式 resource_id 对该 app/token 未授权，回退到模型关联的通用 resource 后仍提示音色与资源不匹配。请以火山控制台中当前 AccessKey 实际开通的音色/ResourceID 对应关系为准",
+			voice,
+			preferred.ConfigModel,
+			preferred.ResourceID,
+			retryInfo,
+		)
+	}
+	if hasNotGranted {
+		return fmt.Errorf(
+			"豆包 WebSocket TTS resource_id 未授权: voice=%s, model=%s, resource_id=%s%s。当前 app/token 无权访问该 ResourceID，请改用当前 AccessKey 实际授权的 ResourceID，或清空 resource_id 走模型默认映射",
+			voice,
+			preferred.ConfigModel,
+			preferred.ResourceID,
+			retryInfo,
+		)
+	}
+	if !hasMismatch {
+		return lastErr
+	}
+
+	hint := "所选音色与当前 app/token 可访问的 v3 ResourceID 不匹配。旧版 v1 音色列表不会自动无缝迁移到 v3。"
+	switch strings.ToLower(strings.TrimSpace(voice)) {
+	case "zh_female_wanwanxiaohe_moon_bigtts", "zh_female_qinqienvsheng_moon_bigtts":
+		hint = "所选音色来自旧版静态列表，升级到 v3 后通常需要重新换成你账号下实际开通的音色，旧数据不会自动无缝迁移。"
+	}
+
+	return fmt.Errorf(
+		"豆包 WebSocket TTS 音色与资源不匹配: voice=%s, model=%s, resource_id=%s%s。%s 请以火山控制台或账号实际开通的音色/ResourceID 对应关系为准",
+		voice,
+		preferred.ConfigModel,
+		preferred.ResourceID,
+		retryInfo,
+		hint,
+	)
+}
+
+func gzipCompressDoubao(input []byte) ([]byte, error) {
+	var buffer bytes.Buffer
+	writer := gzip.NewWriter(&buffer)
+	if _, err := writer.Write(input); err != nil {
+		_ = writer.Close()
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func gzipDecompressDoubao(input []byte) ([]byte, error) {
+	reader, err := gzip.NewReader(bytes.NewReader(input))
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
+func looksLikeJSONPayload(payload []byte) bool {
+	trimmed := bytes.TrimSpace(payload)
+	return len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
 }

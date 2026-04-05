@@ -12,6 +12,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	einoschema "github.com/cloudwego/eino/schema"
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	cmap "github.com/orcaman/concurrent-map/v2"
@@ -64,6 +65,12 @@ type WebSocketResponse struct {
 	Headers map[string]string      `json:"headers,omitempty"`
 	Body    map[string]interface{} `json:"body,omitempty"`
 	Error   string                 `json:"error,omitempty"`
+}
+
+type managerWSClientClaims struct {
+	Purpose string `json:"purpose"`
+	UUID    string `json:"uuid"`
+	jwt.RegisteredClaims
 }
 
 var (
@@ -120,11 +127,18 @@ func (c *WebSocketClient) Connect(ctx context.Context) error {
 
 	// 将HTTP URL转换为WebSocket URL
 	wsURL := "ws://" + c.baseURL[7:] + "/ws" // 去掉 "http://" 并添加 "/ws"
+	wsToken, err := c.generateWSToken()
+	if err != nil {
+		return fmt.Errorf("生成WebSocket认证token失败: %v", err)
+	}
 
 	// 建立WebSocket连接
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{
 		"Origin": []string{c.baseURL},
 		"UUID":   []string{c.uuid},
+		"Authorization": []string{
+			"Bearer " + wsToken,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("WebSocket连接失败: %v", err)
@@ -150,6 +164,20 @@ func (c *WebSocketClient) Connect(ctx context.Context) error {
 
 	log.Debugf("WebSocket客户端已连接到: %s", wsURL)
 	return nil
+}
+
+func (c *WebSocketClient) generateWSToken() (string, error) {
+	claims := managerWSClientClaims{
+		Purpose: "manager-ws-client",
+		UUID:    c.uuid,
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	secret := []byte(util.GetManagerEndpointAuthToken())
+	return token.SignedString(secret)
 }
 
 func (c *WebSocketClient) Disconnect() error {

@@ -3,6 +3,7 @@ package eino_llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,12 +23,13 @@ import (
 // EinoLLMProvider 基于Eino框架的LLM提供者
 // 直接使用Eino的ChatModel接口和类型，支持openai和ollama
 type EinoLLMProvider struct {
-	chatModel    model.ToolCallingChatModel
-	modelName    string
-	maxTokens    int
-	streamable   bool
-	config       map[string]interface{}
-	providerType string // "openai" 或 "ollama"
+	chatModel        model.ToolCallingChatModel
+	modelName        string
+	maxTokens        int
+	streamable       bool
+	config           map[string]interface{}
+	providerType     string // "openai" 或 "ollama"
+	reasoningTracker *reasoningContentTracker
 }
 
 // EinoConfig Eino LLM配置
@@ -89,28 +91,37 @@ func getHTTPClient() *http.Client {
 // NewEinoLLMProvider 创建新的Eino LLM提供者，根据type支持openai和ollama
 func NewEinoLLMProvider(config map[string]interface{}) (*EinoLLMProvider, error) {
 	//log.Debugf("NewEinoLLMProvider config: %+v", config)
-	providerType, _ := config["type"].(string)
+	var tracker *reasoningContentTracker
+	if enabled, _ := config[reasoningDetectConfigKey].(bool); enabled {
+		tracker = &reasoningContentTracker{}
+		config[reasoningTrackerConfigKey] = tracker
+	}
+	parsedConfig, err := decodeOpenAICompatibleConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("解析LLM配置失败: %v", err)
+	}
+
+	providerType := parsedConfig.Type
 	if providerType == "" {
 		return nil, fmt.Errorf("type不能为空，必须是 'openai' 或 'ollama'")
 	}
 
-	modelName, _ := config["model_name"].(string)
+	modelName := parsedConfig.ModelName
 	if modelName == "" {
 		return nil, fmt.Errorf("model_name不能为空")
 	}
 
 	maxTokens := 500
-	if mt, ok := config["max_tokens"].(int); ok {
-		maxTokens = mt
+	if parsedConfig.MaxTokens != nil {
+		maxTokens = *parsedConfig.MaxTokens
 	}
 
 	streamable := true
-	if s, ok := config["streamable"].(bool); ok {
-		streamable = s
+	if parsedConfig.Streamable != nil {
+		streamable = *parsedConfig.Streamable
 	}
 
 	var chatModel model.ToolCallingChatModel
-	var err error
 
 	// 根据类型创建不同的ChatModel实现
 	switch providerType {
@@ -129,42 +140,65 @@ func NewEinoLLMProvider(config map[string]interface{}) (*EinoLLMProvider, error)
 	}
 
 	provider := &EinoLLMProvider{
-		chatModel:    chatModel,
-		modelName:    modelName,
-		maxTokens:    maxTokens,
-		streamable:   streamable,
-		config:       config,
-		providerType: providerType,
+		chatModel:        chatModel,
+		modelName:        modelName,
+		maxTokens:        maxTokens,
+		streamable:       streamable,
+		config:           config,
+		providerType:     providerType,
+		reasoningTracker: tracker,
 	}
 
 	return provider, nil
+}
+
+func (p *EinoLLMProvider) HasReasoningContent() bool {
+	return p != nil && p.reasoningTracker != nil && p.reasoningTracker.HasReturned()
 }
 
 // createOpenAIChatModel 创建OpenAI的ChatModel实现
 func createOpenAIChatModel(config map[string]interface{}) (model.ToolCallingChatModel, error) {
 	ctx := context.Background()
 
-	modelName, _ := config["model_name"].(string)
+	parsedConfig, err := decodeOpenAICompatibleConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("解析OpenAI兼容配置失败: %v", err)
+	}
+
+	modelName := parsedConfig.ModelName
 	if modelName == "" {
 		modelName = "gpt-3.5-turbo"
 	}
 
-	apiKey, _ := config["api_key"].(string)
+	apiKey := parsedConfig.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
 
-	baseURL, _ := config["base_url"].(string)
+	httpClient := buildThinkingHTTPClient(config, getHTTPClient())
+	useMaxCompletionTokens := shouldUseMaxCompletionTokens(parsedConfig.Provider, modelName)
 
 	// 创建OpenAI ChatModel配置
 	openaiConfig := &openai.ChatModelConfig{
 		Model:      modelName,
 		APIKey:     apiKey,
-		HTTPClient: getHTTPClient(),
+		HTTPClient: httpClient,
 	}
 
-	if baseURL != "" {
-		openaiConfig.BaseURL = baseURL
+	if parsedConfig.BaseURL != "" {
+		openaiConfig.BaseURL = parsedConfig.BaseURL
+	}
+	if parsedConfig.APIVersion != "" {
+		openaiConfig.APIVersion = parsedConfig.APIVersion
+	}
+	if !useMaxCompletionTokens && parsedConfig.MaxTokens != nil && *parsedConfig.MaxTokens > 0 {
+		openaiConfig.MaxTokens = parsedConfig.MaxTokens
+	}
+	if parsedConfig.Temperature != nil {
+		openaiConfig.Temperature = parsedConfig.Temperature
+	}
+	if parsedConfig.TopP != nil {
+		openaiConfig.TopP = parsedConfig.TopP
 	}
 
 	log.Debugf("openaiConfig: %+v", openaiConfig)
@@ -263,6 +297,9 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 	var err error
 	go func() {
 		defer close(responseChan)
+		if p.reasoningTracker != nil {
+			p.reasoningTracker.Reset()
+		}
 
 		log.Infof("[Eino-LLM] 开始处理Eino工具请求 - SessionID: %s, tools: %+v", sessionID, tools)
 
@@ -279,11 +316,11 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 		if p.streamable {
 			log.Debugf("EinoLLMProvider.EinoResponseWithTools() streamable: %t", p.streamable)
 			// 直接使用Eino的Stream方法
-			streamReader, err := p.chatModel.Stream(ctx, messages, model.WithMaxTokens(p.maxTokens))
+			streamReader, err := p.chatModel.Stream(ctx, messages, p.buildModelCallOptions()...)
 			if err != nil {
 				log.Errorf("Eino工具流式调用失败: %v", err)
 				// 对于mock实现，如果Stream失败，回退到Generate
-				message, genErr := p.chatModel.Generate(ctx, messages, model.WithMaxTokens(p.maxTokens))
+				message, genErr := p.chatModel.Generate(ctx, messages, p.buildModelCallOptions()...)
 				if genErr != nil {
 					log.Errorf("Eino工具生成响应失败: %v", genErr)
 					sendLLMError(responseChan, genErr)
@@ -301,12 +338,17 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 				var currentToolCall *schema.ToolCall
 				var toolCallBuffer string
 				var isToolCallComplete bool
+				var streamChunkCount int
 
 				// 处理流式响应
 				for {
 					message, err := streamReader.Recv()
 					//log.Debugf("streamReader.Recv() message: %+v", message)
 					if err == io.EOF {
+						if streamChunkCount == 0 {
+							sendLLMError(responseChan, errors.New("流式响应为空"))
+							break
+						}
 						// 如果有未完成的工具调用，发送最后一次
 						if currentToolCall != nil {
 							completeMessage := &schema.Message{
@@ -318,12 +360,21 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 						break
 					}
 					if err != nil {
+						if ctxErr := ctx.Err(); ctxErr != nil {
+							if errors.Is(ctxErr, context.Canceled) {
+								log.Debugf("流式响应已取消: %v", ctxErr)
+							} else {
+								log.Warnf("流式响应已结束: %v", ctxErr)
+							}
+							break
+						}
 						log.Errorf("接收流式响应失败: %v", err)
 						sendLLMError(responseChan, err)
 						break
 					}
 
 					if message != nil {
+						streamChunkCount++
 						// 检查是否是工具调用的开始
 						if len(message.ToolCalls) > 0 {
 							toolCall := message.ToolCalls[0]
@@ -364,10 +415,12 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 						}
 					}
 				}
+			} else {
+				sendLLMError(responseChan, errors.New("流式响应为空"))
 			}
 		} else {
 			// 直接使用Eino的Generate方法
-			message, err := p.chatModel.Generate(ctx, messages, model.WithMaxTokens(p.maxTokens))
+			message, err := p.chatModel.Generate(ctx, messages, p.buildModelCallOptions()...)
 			if err != nil {
 				log.Errorf("Eino工具生成响应失败: %v", err)
 				sendLLMError(responseChan, err)
@@ -383,6 +436,25 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 	}()
 
 	return responseChan
+}
+
+func (p *EinoLLMProvider) buildModelCallOptions() []model.Option {
+	if p == nil || p.maxTokens <= 0 {
+		return nil
+	}
+
+	provider := ""
+	if p.config != nil {
+		if rawProvider, ok := p.config["provider"].(string); ok {
+			provider = rawProvider
+		}
+	}
+
+	if shouldUseMaxCompletionTokens(provider, p.modelName) {
+		return nil
+	}
+
+	return []model.Option{model.WithMaxTokens(p.maxTokens)}
 }
 
 // isValidJSON 检查字符串是否是有效的JSON

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"xiaozhi-esp32-server-golang/internal/domain/openclaw"
+	"xiaozhi-esp32-server-golang/internal/util"
 	log "xiaozhi-esp32-server-golang/logger"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -321,7 +322,7 @@ func (s *WebSocketServer) parseOpenClawToken(tokenString string) (*OpenClawClaim
 		tokenString = strings.TrimSpace(strings.TrimPrefix(tokenString, "Bearer "))
 	}
 
-	jwtSecret := []byte("xiaozhi_admin_secret_key")
+	jwtSecret := []byte(util.GetManagerEndpointAuthToken())
 	token, err := jwt.ParseWithClaims(tokenString, &OpenClawClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return jwtSecret, nil
 	})

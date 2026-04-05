@@ -20,6 +20,8 @@ import (
 	. "xiaozhi-esp32-server-golang/internal/data/client"
 	"xiaozhi-esp32-server-golang/internal/data/history"
 	. "xiaozhi-esp32-server-golang/internal/data/msg"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
+	"xiaozhi-esp32-server-golang/internal/domain/chat/streamtransform"
 	user_config "xiaozhi-esp32-server-golang/internal/domain/config"
 	"xiaozhi-esp32-server-golang/internal/domain/config/types"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
@@ -73,22 +75,28 @@ type ChatSession struct {
 	closeOnce sync.Once
 	closed    bool
 
+	// stopSpeaking 保护，防止与 AddAsrResultToQueue/HandleWelcome 并发冲突
+	stopSpeakingMu sync.Mutex
+
 	openClawStreamMu sync.Mutex
 	openClawStreams  map[string]chan llm_common.LLMResponseStruct
 
 	openClawWarmupMu sync.Mutex
 	openClawWarmup   *openClawWarmupTask
+
+	hookHub *chathooks.Hub
 }
 
 type ChatSessionOption func(*ChatSession)
 
-func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, opts ...ChatSessionOption) *ChatSession {
+func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, hookHub *chathooks.Hub, transformRegistry *streamtransform.Registry, opts ...ChatSessionOption) *ChatSession {
 	s := &ChatSession{
 		clientState:        clientState,
 		serverTransport:    serverTransport,
 		chatTextQueue:      util.NewQueue[AsrResponseChannelItem](10),
 		speakerResultReady: make(chan struct{}, 1), // 缓冲为1，避免阻塞
 		openClawStreams:    make(map[string]chan llm_common.LLMResponseStruct),
+		hookHub:            hookHub,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -96,8 +104,8 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 
 	s.asrManager = NewASRManager(clientState, serverTransport)
 	s.asrManager.session = s // 设置 session 引用
-	s.ttsManager = NewTTSManager(clientState, serverTransport)
-	s.llmManager = NewLLMManager(clientState, serverTransport, s.ttsManager)
+	s.ttsManager = NewTTSManager(clientState, serverTransport, s)
+	s.llmManager = NewLLMManager(clientState, serverTransport, s.ttsManager, s, transformRegistry)
 
 	// 如果启用声纹识别，创建声纹管理器
 	if clientState.IsSpeakerEnabled() {
@@ -200,8 +208,10 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 	clientState.OnAsrFirstTextCallback = func(text string, isFinal bool) {
 		clientState.Asr.MarkTextReceived()
 		log.Debugf("ASR首次返回字符: device=%s, text=%s, isFinal=%v", clientState.DeviceID, text, isFinal)
+		clientState.MarkAsrFirstText()
+		s.TraceAsrFirstText(clientState.Ctx, time.Now().UnixMilli())
 		if clientState.IsRealTime() && viper.GetInt("chat.realtime_mode") == 4 {
-			clientState.AfterAsrSessionCtx.Cancel()
+			clientState.AfterAsrSessionCtx.CancelWithReason("ChatSession.OnAsrFirstTextCallback: realtime_mode=4")
 			s.InterruptAndClearTTSQueue()
 		}
 	}
@@ -317,7 +327,7 @@ func (s *ChatSession) loadFromManager() ([]*schema.Message, error) {
 	// 创建 HistoryClient
 	historyCfg := history.HistoryClientConfig{
 		BaseURL:   util.GetBackendURL(),
-		AuthToken: viper.GetString("manager.history_auth_token"),
+		AuthToken: util.GetManagerAuthToken(),
 		Timeout:   viper.GetDuration("manager.history_timeout"),
 		Enabled:   true,
 	}
@@ -759,43 +769,8 @@ func (s *ChatSession) isCurrentListenStart(startSeq uint64) bool {
 	return startSeq == s.listenStartSeq.Load()
 }
 
-func (s *ChatSession) isListenStartActive() bool {
-	phase := s.clientState.GetListenPhase()
-	return phase == ListenPhaseStarting || phase == ListenPhaseListening
-}
-
-func (s *ChatSession) handleDetectDuringListening(msg *ClientMessage) error {
-	if strings.TrimSpace(msg.Text) == "" {
-		return nil
-	}
-
-	text := removePunctuation(msg.Text)
-	if !isWakeupWord(text) {
-		log.Debugf("设备 %s 监听已启动，忽略后到达的 detect 文本: %s", msg.DeviceID, text)
-		return nil
-	}
-
-	if viper.GetBool("enable_greeting") && !s.clientState.IsWelcomeSpeaking {
-		s.clientState.IsWelcomeSpeaking = true
-		log.Infof("设备 %s listen start 流程中收到 detect 唤醒词，跳过欢迎语并继续当前监听", msg.DeviceID)
-	}
-
-	return nil
-}
-
 func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
-	/*if s.clientState.Status == ClientStatusListening {
-		log.Debugf("设备 %s 正在监听, 跳过唤醒词检测", msg.DeviceID)
-		return nil
-	}*/
-	if s.isListenStartActive() {
-		return s.handleDetectDuringListening(msg)
-	}
-
-	// 唤醒词检测
-	s.StopSpeaking(false)
-
-	// 如果有文本，处理唤醒词
+	// 检查设备激活状态
 	if msg.Text != "" {
 		isActivated, err := s.CheckDeviceActivated()
 		if err != nil {
@@ -805,32 +780,28 @@ func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
 		if !isActivated {
 			return nil
 		}
+	}
 
-		text := msg.Text
-		// 移除标点符号和处理长度
-		text = removePunctuation(text)
+	// 停止当前播放
+	s.StopSpeaking(false)
 
-		// 检查是否是唤醒词
-		isWakeupWord := isWakeupWord(text)
-		enableGreeting := viper.GetBool("enable_greeting") // 从配置获取
+	// 如果有文本，处理
+	if msg.Text != "" {
+		text := removePunctuation(msg.Text)
 
-		var needStartChat bool
-		if !isWakeupWord || (isWakeupWord && enableGreeting) {
-			needStartChat = true
+		enableGreeting := viper.GetBool("enable_greeting")
+		// 唤醒词 + 启用 greeting -> 走欢迎模式
+		if isWakeupWord(text) && enableGreeting {
+			if !s.clientState.IsWelcomeSpeaking {
+				s.HandleWelcome()
+			}
+			return nil
 		}
-		if needStartChat {
-			// 否则开始对话
-			if enableGreeting && isWakeupWord {
-				//进行tts欢迎语
-				if !s.clientState.IsWelcomeSpeaking {
-					s.HandleWelcome()
-				}
-			} else {
-				s.clientState.Destroy()
-				//进行llm->tts聊天
-				if err := s.AddAsrResultToQueue(text, nil); err != nil {
-					log.Errorf("开始对话失败: %v", err)
-				}
+
+		if enableGreeting {
+			// 默认兜底走 AddAsrResultToQueue
+			if err := s.AddAsrResultToQueue(text, nil); err != nil {
+				log.Errorf("开始对话失败: %v", err)
 			}
 		}
 	}
@@ -856,21 +827,43 @@ func (s *ChatSession) HandleNotActivated() {
 	defer s.ttsManager.EnqueueTtsStop(s.clientState.Ctx)
 
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
-	_ = s.ttsManager.handleTextResponse(s.clientState.AfterAsrSessionCtx.Get(sessionCtx), llm_common.LLMResponseStruct{
+	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
+	err = s.ttsManager.handleTextResponse(ctx, llm_common.LLMResponseStruct{
 		Text: fmt.Sprintf("请在后台添加设备，激活码: %s", code),
 	}, false)
+	s.ttsManager.RequestTurnEnd(ctx, err)
 
 }
 
 func (s *ChatSession) HandleWelcome() {
 	greetingText := s.GetRandomGreeting()
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
+
+	// 检查 session 是否已被停止（通过尝试获取锁来判断）
+	if !s.stopSpeakingMu.TryLock() {
+		log.Debugf("HandleWelcome 正在执行 StopSpeaking，跳过欢迎语")
+		return
+	}
+	s.stopSpeakingMu.Unlock()
+
+	// 检查 sessionCtx 是否已取消
+	if sessionCtx.Err() != nil {
+		log.Debugf("HandleWelcome sessionCtx 已取消，跳过欢迎语")
+		return
+	}
+
 	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
+	// 检查 afterAsrCtx 是否已取消
+	if ctx.Err() != nil {
+		log.Debugf("HandleWelcome afterAsrCtx 已取消，跳过欢迎语")
+		return
+	}
 
 	s.clientState.IsWelcomeSpeaking = true
 	s.clientState.IsWelcomePlaying = true
 	s.ttsManager.EnqueueTtsStart(s.clientState.Ctx)
-	s.ttsManager.handleTts(ctx, s.ttsManager.currentAudioGeneration(), llm_common.LLMResponseStruct{Text: greetingText}, nil, nil)
+	err := s.ttsManager.handleTts(ctx, s.ttsManager.currentAudioGeneration(), s.ttsManager.currentTtsMetricCycle(), llm_common.LLMResponseStruct{Text: greetingText}, nil, nil)
+	s.ttsManager.RequestTurnEnd(ctx, err)
 	s.ttsManager.EnqueueTtsStop(s.clientState.Ctx)
 }
 
@@ -973,11 +966,18 @@ func (s *ChatSession) getOrCreateOpenClawStream(correlationID string) (chan llm_
 			if !s.clientState.IsRealTime() {
 				s.ttsManager.EnqueueTtsStop(ctx)
 			}
+			s.ttsManager.RequestTurnEnd(ctx, err)
 			s.finishOpenClawWarmup(correlationID, false)
 		}
 	}
 	log.Infof("OpenClaw stream created: device=%s correlation_id=%s warmup_attached=%v", s.clientState.DeviceID, correlationID, hasWarmup)
 	if err := s.llmManager.HandleLLMResponseChannelAsyncWithOptions(ctx, nil, streamChan, options); err != nil {
+		if hasWarmup && !s.clientState.IsRealTime() {
+			s.ttsManager.EnqueueTtsStop(ctx)
+		}
+		if hasWarmup {
+			s.ttsManager.RequestTurnEnd(ctx, err)
+		}
 		s.openClawStreamMu.Lock()
 		delete(s.openClawStreams, correlationID)
 		s.openClawStreamMu.Unlock()
@@ -1068,7 +1068,7 @@ func (s *ChatSession) InjectOpenClawResponse(event openclaw.ResponseDelivery) er
 
 // InterruptAndClearTTSQueue 触发 TTS 打断并清空发送队列（供 realtime 模式 VAD 打断等场景调用）
 func (s *ChatSession) InterruptAndClearTTSQueue() {
-	s.ttsManager.InterruptAndClearQueue()
+	s.ttsManager.InterruptAndStop(s.clientState.Ctx, true, context.Canceled)
 }
 
 // handleAbortMessage 处理中止消息
@@ -1076,7 +1076,11 @@ func (s *ChatSession) HandleAbortMessage(msg *ClientMessage) error {
 	// 设置打断状态
 	s.clientState.Abort = true
 
-	s.StopSpeaking(true)
+	if s.clientState.IsRealTime() {
+		s.StopSpeakingAfterAsr(true)
+	} else {
+		s.StopSpeaking(true)
+	}
 
 	// 记录日志
 	log.Infof("设备 %s abort 会话", msg.DeviceID)
@@ -1165,6 +1169,35 @@ func (s *ChatSession) CheckDeviceActivated() (bool, error) {
 }
 
 func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
+	// 先检查激活状态
+	isActivated, err := s.CheckDeviceActivated()
+	if err != nil {
+		log.Errorf("检查设备激活状态失败: %v", err)
+		return err
+	}
+	if !isActivated {
+		return nil
+	}
+
+	// realtime 模式首次启动：跳过欢迎语判断和 Destroy，直接进入监听
+	if msg.Mode == "realtime" {
+
+		if !s.clientState.IsWelcomePlaying {
+			s.StopSpeaking(false)
+		}
+
+		s.clientState.ListenMode = msg.Mode
+		log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
+
+		startSeq := s.beginListenStart()
+		go func() {
+			if err := s.OnListenStart(startSeq); err != nil {
+				log.Errorf("设备 %s listen start 启动失败: %v", msg.DeviceID, err)
+			}
+		}()
+		return nil
+	}
+
 	if s.clientState.IsWelcomePlaying {
 		log.Infof("设备 %s 欢迎语播放中，忽略 listen start", msg.DeviceID)
 		return nil
@@ -1175,20 +1208,9 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 		return nil
 	}
 
-	isActivated, err := s.CheckDeviceActivated()
-	if err != nil {
-		log.Errorf("检查设备激活状态失败: %v", err)
-		return err
-	}
-	if !isActivated {
-		return nil
-	}
-
 	// 处理拾音模式
-	if msg.Mode != "" {
-		s.clientState.ListenMode = msg.Mode
-		log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
-	}
+	s.clientState.ListenMode = msg.Mode
+	log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
 	//if s.clientState.ListenMode == "manual" {
 	s.StopSpeaking(false)
 	//}
@@ -1233,10 +1255,15 @@ func (s *ChatSession) OnListenStart(startSeq uint64) error {
 	default:
 	}
 
-	s.clientState.Destroy()
-	if !s.isCurrentListenStart(startSeq) {
-		log.Debugf("OnListenStart stale after destroy, skip")
-		return nil
+	// realtime 模式：跳过 Destroy，保持 ASR 持续运行，但清空 AudioBuffer
+	if s.clientState.IsRealTime() {
+		s.clientState.AsrAudioBuffer.ClearAsrAudioData()
+	} else {
+		s.clientState.Destroy()
+		if !s.isCurrentListenStart(startSeq) {
+			log.Debugf("OnListenStart stale after destroy, skip")
+			return nil
+		}
 	}
 
 	s.clientState.SetListenPhase(ListenPhaseStarting)
@@ -1267,9 +1294,7 @@ func (s *ChatSession) OnListenStart(startSeq uint64) error {
 
 	if !s.isCurrentListenStart(startSeq) {
 		log.Debugf("OnListenStart stale after ASR restart, cancel current start")
-		if s.clientState.Asr.Cancel != nil {
-			s.clientState.Asr.Cancel()
-		}
+		s.clientState.Asr.CancelWithReason("ChatSession.OnListenStart: stale listen start after ASR restart")
 		return nil
 	}
 
@@ -1311,7 +1336,22 @@ func (s *ChatSession) AddAsrResultToQueue(text string, speakerResult *speaker.Id
 	if speakerResult != nil && speakerResult.Identified {
 		log.Debugf("AddAsrResultToQueue speaker: %s (confidence: %.2f)", speakerResult.SpeakerName, speakerResult.Confidence)
 	}
+
+	// 检查 session 是否已被停止（通过尝试获取锁来判断）
+	// 如果 StopSpeaking 正在执行，这里会等待；如果已执行完成，tryLock 会立即返回
+	if !s.stopSpeakingMu.TryLock() {
+		log.Debugf("AddAsrResultToQueue 正在执行 StopSpeaking，丢弃消息")
+		return nil
+	}
+	s.stopSpeakingMu.Unlock()
+
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
+	// 检查 sessionCtx 是否已取消
+	if sessionCtx.Err() != nil {
+		log.Debugf("AddAsrResultToQueue sessionCtx 已取消，丢弃消息")
+		return nil
+	}
+
 	item := AsrResponseChannelItem{
 		ctx:           s.clientState.AfterAsrSessionCtx.Get(sessionCtx),
 		text:          text,
@@ -1375,6 +1415,7 @@ func (s *ChatSession) DoExitChat() {
 		return
 	}
 
+	s.ttsManager.RequestTurnEnd(ctx, err)
 	s.ttsManager.EnqueueTtsStop(ctx)
 
 	// handleTextResponse(sync=true) 只保证 TTS 音频已生成并入队到 sessionAudioQueue，
@@ -1421,6 +1462,10 @@ func (s *ChatSession) Close() {
 
 		if s.speakerManager != nil {
 			s.speakerManager.Close()
+		}
+
+		if s.hookHub != nil {
+			s.hookHub.Close()
 		}
 
 		if s.clientState != nil {
@@ -1728,4 +1773,70 @@ func (s *ChatSession) switchTTSForSpeaker(speakerResult *speaker.IdentifyResult)
 		speakerGroupInfo.Voice)
 
 	return nil
+}
+
+func (s *ChatSession) hookContext(ctx context.Context) chathooks.Context {
+	sessionID := ""
+	deviceID := ""
+	if s != nil && s.clientState != nil {
+		sessionID = s.clientState.SessionID
+		deviceID = s.clientState.DeviceID
+	}
+
+	return chathooks.Context{
+		Ctx:       ctx,
+		SessionID: sessionID,
+		DeviceID:  deviceID,
+	}
+}
+
+func (s *ChatSession) emitMetricStage(ctx context.Context, stage chathooks.MetricStage, ts int64, err error) {
+	if s == nil {
+		return
+	}
+
+	hookErr := s.hookHub.EmitMetric(s.hookContext(ctx), chathooks.MetricData{Stage: stage, Ts: ts, Err: err})
+	if hookErr != nil {
+		log.Warnf("METRIC hook 执行失败: stage=%s err=%v", stage, hookErr)
+	}
+}
+
+func (s *ChatSession) TraceTurnStart(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricTurnStart, ts, nil)
+}
+
+func (s *ChatSession) TraceTurnEnd(ctx context.Context, ts int64, err error) {
+	s.emitMetricStage(ctx, chathooks.MetricTurnEnd, ts, err)
+}
+
+func (s *ChatSession) TraceAsrFirstText(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricAsrFirstText, ts, nil)
+}
+
+func (s *ChatSession) TraceAsrFinalText(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricAsrFinalText, ts, nil)
+}
+
+func (s *ChatSession) TraceLlmStart(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricLlmStart, ts, nil)
+}
+
+func (s *ChatSession) TraceLlmFirstToken(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricLlmFirstToken, ts, nil)
+}
+
+func (s *ChatSession) TraceLlmEnd(ctx context.Context, ts int64, err error) {
+	s.emitMetricStage(ctx, chathooks.MetricLlmEnd, ts, err)
+}
+
+func (s *ChatSession) TraceTtsStart(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricTtsStart, ts, nil)
+}
+
+func (s *ChatSession) TraceTtsFirstFrame(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricTtsFirstFrame, ts, nil)
+}
+
+func (s *ChatSession) TraceTtsStop(ctx context.Context, ts int64, err error) {
+	s.emitMetricStage(ctx, chathooks.MetricTtsStop, ts, err)
 }

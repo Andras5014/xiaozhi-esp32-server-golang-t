@@ -142,7 +142,7 @@ func (am *ConfigManager) callCheckActivationAPI(ctx context.Context, deviceId, c
 	// 发送HTTP请求
 	err := am.client.DoRequest(ctx, http.RequestOptions{
 		Method: "GET",
-		Path:   "/api/public/device/check-activation",
+		Path:   "/api/internal/device/check-activation",
 		QueryParams: map[string]string{
 			"device_id": deviceId,
 			"client_id": clientId,
@@ -164,7 +164,7 @@ func (am *ConfigManager) callGetActivationInfoAPI(ctx context.Context, deviceId,
 	// 发送HTTP请求
 	err := am.client.DoRequest(ctx, http.RequestOptions{
 		Method: "GET",
-		Path:   "/api/public/device/activation-info",
+		Path:   "/api/internal/device/activation-info",
 		QueryParams: map[string]string{
 			"device_id": deviceId,
 			"client_id": clientId,
@@ -201,7 +201,7 @@ func (am *ConfigManager) callActivateDeviceAPI(ctx context.Context, deviceId, cl
 	// 发送HTTP请求
 	err := am.client.DoRequest(ctx, http.RequestOptions{
 		Method:   "POST",
-		Path:     "/api/public/device/activate",
+		Path:     "/api/internal/device/activate",
 		Body:     request,
 		Response: &response,
 	})

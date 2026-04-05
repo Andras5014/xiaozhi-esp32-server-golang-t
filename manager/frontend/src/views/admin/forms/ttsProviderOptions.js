@@ -1,4 +1,4 @@
-export const TTS_PROVIDERS_WITH_VOICE_CLONE = ['minimax', 'cosyvoice', 'aliyun_qwen', 'indextts_vllm']
+export const TTS_PROVIDERS_WITH_VOICE_CLONE = ['doubao_ws', 'minimax', 'cosyvoice', 'aliyun_qwen', 'indextts_vllm']
 
 const voiceCloneProviderSet = new Set(TTS_PROVIDERS_WITH_VOICE_CLONE)
 

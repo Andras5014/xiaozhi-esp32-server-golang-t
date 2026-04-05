@@ -1,78 +1,212 @@
 package doubao
 
 import (
-	"context"
-	"fmt"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
 	"testing"
 )
 
-// 测试TextToSpeechStream方法
-func TestTextToSpeechStream(t *testing.T) {
-	// 使用实际的配置
+func TestNewDoubaoWSProvider(t *testing.T) {
 	config := map[string]interface{}{
 		"appid":        "appid",
 		"access_token": "access_token",
-		"cluster":      "volcano_tts",
-		//"voice":        "BV001_streaming",
-		"voice":      "zh_female_wanwanxiaohe_moon_bigtts",
-		"ws_host":    "openspeech.bytedance.com",
-		"use_stream": true,
+		"model":        "seed-tts-1.1",
+		"voice":        "zh_female_wanwanxiaohe_moon_bigtts",
+		"ws_url":       "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream",
 	}
 
-	// 创建一个测试provider
 	provider := NewDoubaoWSProvider(config)
+	if provider.AppID != "appid" {
+		t.Fatalf("AppID = %q", provider.AppID)
+	}
+	if provider.Model != "seed-tts-1.1" {
+		t.Fatalf("Model = %q", provider.Model)
+	}
+	if provider.WSURL != "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream" {
+		t.Fatalf("WSURL = %q", provider.WSURL)
+	}
+}
 
-	t.Run("测试正常流式回调", func(t *testing.T) {
+func TestNewDoubaoWSProviderCompatWsHost(t *testing.T) {
+	config := map[string]interface{}{
+		"appid":        "appid",
+		"access_token": "access_token",
+		"voice":        "zh_female_wanwanxiaohe_moon_bigtts",
+		"ws_host":      "openspeech.bytedance.com",
+	}
 
-		// 直接调用实际的API
-		outputOpusChan, err := provider.TextToSpeechStream(context.Background(), "这是一个测试文本，今天天气怎么样, 今天天气真好, 你是中国人, 咱们去北京天津玩好不好, 北京有什么好玩的，天津之眼吧")
-		if err != nil {
-			t.Fatalf("TextToSpeechStream返回错误: %v", err)
-		}
+	provider := NewDoubaoWSProvider(config)
+	want := "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream"
+	if provider.WSURL != want {
+		t.Fatalf("WSURL = %q, want %q", provider.WSURL, want)
+	}
+}
 
-		for opusFrame := range outputOpusChan {
-			fmt.Printf("收到opus帧: %d\n", len(opusFrame))
-		}
+func TestNewDoubaoWSProviderNormalizesMissingStreamPath(t *testing.T) {
+	config := map[string]interface{}{
+		"appid":        "appid",
+		"access_token": "access_token",
+		"voice":        "zh_female_wanwanxiaohe_moon_bigtts",
+		"ws_url":       "wss://openspeech.bytedance.com/api/v3/tts/unidirectional",
+	}
 
-	})
-	/*
-		t.Run("测试取消功能", func(t *testing.T) {
-			var (
-				receivedChunks [][]byte
-				mu             sync.Mutex
-			)
+	provider := NewDoubaoWSProvider(config)
+	want := "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream"
+	if provider.WSURL != want {
+		t.Fatalf("WSURL = %q, want %q", provider.WSURL, want)
+	}
+}
 
-			// 回调函数
-			onChunk := func(chunkData []byte, isLast bool) error {
-				mu.Lock()
-				defer mu.Unlock()
+func TestParseDoubaoWSFullServerResponse(t *testing.T) {
+	payloadJSON := []byte(`{"code":0,"message":"Success","sequence":1}`)
+	frame := []byte{0x11, 0x90, 0x10, 0x00}
+	payload := make([]byte, 8+len(payloadJSON))
+	binary.BigEndian.PutUint32(payload[0:4], uint32(1))
+	binary.BigEndian.PutUint32(payload[4:8], uint32(len(payloadJSON)))
+	copy(payload[8:], payloadJSON)
+	frame = append(frame, payload...)
 
-				if chunkData != nil {
-					receivedChunks = append(receivedChunks, chunkData)
-				}
+	got, isLast, err := parseDoubaoWSMessage(2, frame)
+	if err != nil {
+		t.Fatalf("parseDoubaoWSMessage error = %v", err)
+	}
+	if isLast {
+		t.Fatal("expected non-final ack")
+	}
+	if len(got) != 0 {
+		t.Fatalf("unexpected audio chunk: %v", got)
+	}
+}
 
-				return nil
-			}
+func TestNewDoubaoWSPayloadUsesV3ReqParams(t *testing.T) {
+	payload := newDoubaoWSPayload("测试", "voice-demo", 24000, modelSeedTTS20Standard)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload error = %v", err)
+	}
 
-			// 直接调用实际的API
-			cancelFunc, err := provider.TextToSpeechStream("另一个测试文本", onChunk)
-			if err != nil {
-				t.Fatalf("TextToSpeechStream返回错误: %v", err)
-			}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal payload error = %v", err)
+	}
+	reqParams, ok := got["req_params"].(map[string]any)
+	if !ok {
+		t.Fatalf("req_params missing: %#v", got)
+	}
+	if reqParams["text"] != "测试" {
+		t.Fatalf("text = %#v", reqParams["text"])
+	}
+	if reqParams["speaker"] != "voice-demo" {
+		t.Fatalf("speaker = %#v", reqParams["speaker"])
+	}
+	if reqParams["model"] != modelSeedTTS20Standard {
+		t.Fatalf("model = %#v", reqParams["model"])
+	}
+	audio, ok := reqParams["audio_params"].(map[string]any)
+	if !ok {
+		t.Fatalf("audio_params missing: %#v", reqParams)
+	}
+	if audio["sample_rate"] != float64(24000) {
+		t.Fatalf("sample_rate = %#v", audio["sample_rate"])
+	}
+	if audio["format"] != defaultDoubaoAudioFmt {
+		t.Fatalf("format = %#v", audio["format"])
+	}
+}
 
-			// 等待一小段时间后取消
-			time.Sleep(500 * time.Millisecond)
-			cancelFunc()
+func TestParseDoubaoWSBinaryAudioResponse(t *testing.T) {
+	audio := []byte{0x01, 0x02, 0x03, 0x04}
+	frame := []byte{0x11, 0xB1, 0x00, 0x00}
+	payload := make([]byte, 8+len(audio))
+	binary.BigEndian.PutUint32(payload[0:4], uint32(1))
+	binary.BigEndian.PutUint32(payload[4:8], uint32(len(audio)))
+	copy(payload[8:], audio)
+	frame = append(frame, payload...)
 
-			// 等待一小段时间让取消生效
-			time.Sleep(500 * time.Millisecond)
+	got, isLast, err := parseDoubaoWSMessage(2, frame)
+	if err != nil {
+		t.Fatalf("parseDoubaoWSMessage error = %v", err)
+	}
+	if isLast {
+		t.Fatal("expected non-final frame")
+	}
+	if string(got) != string(audio) {
+		t.Fatalf("audio = %v, want %v", got, audio)
+	}
+}
 
-			// 验证结果
-			mu.Lock()
-			defer mu.Unlock()
+func TestParseDoubaoWSBinaryAudioResponseWithRequestIDEnvelope(t *testing.T) {
+	audio := []byte{0x49, 0x44, 0x33}
+	requestID := []byte("request-id-123")
+	frame := []byte{0x11, 0xB4, 0x00, 0x00}
+	payload := make([]byte, 0, 12+len(requestID)+len(audio))
+	first := make([]byte, 4)
+	second := make([]byte, 4)
+	third := make([]byte, 4)
+	binary.BigEndian.PutUint32(first, uint32(352))
+	binary.BigEndian.PutUint32(second, uint32(len(requestID)))
+	binary.BigEndian.PutUint32(third, uint32(len(audio)))
+	payload = append(payload, first...)
+	payload = append(payload, second...)
+	payload = append(payload, requestID...)
+	payload = append(payload, third...)
+	payload = append(payload, audio...)
+	frame = append(frame, payload...)
 
-			// 因为取消了处理，所以收到的块数应该是有限的
-			t.Logf("取消后接收到 %d 个音频块", len(receivedChunks))
-		})
-	*/
+	got, isLast, err := parseDoubaoWSMessage(2, frame)
+	if err != nil {
+		t.Fatalf("parseDoubaoWSMessage error = %v", err)
+	}
+	if isLast {
+		t.Fatal("expected non-final frame")
+	}
+	if string(got) != string(audio) {
+		t.Fatalf("audio = %v, want %v", got, audio)
+	}
+}
+
+func TestParseDoubaoWSFullServerResponseFinalMarker(t *testing.T) {
+	requestID := []byte("request-id-123")
+	frame := []byte{0x11, 0x94, 0x00, 0x00}
+	payload := make([]byte, 0, 12+len(requestID)+2)
+	first := make([]byte, 4)
+	second := make([]byte, 4)
+	third := make([]byte, 4)
+	binary.BigEndian.PutUint32(first, uint32(152))
+	binary.BigEndian.PutUint32(second, uint32(len(requestID)))
+	binary.BigEndian.PutUint32(third, uint32(2))
+	payload = append(payload, first...)
+	payload = append(payload, second...)
+	payload = append(payload, requestID...)
+	payload = append(payload, third...)
+	payload = append(payload, []byte("{}")...)
+	frame = append(frame, payload...)
+
+	got, isLast, err := parseDoubaoWSMessage(2, frame)
+	if err != nil {
+		t.Fatalf("parseDoubaoWSMessage error = %v", err)
+	}
+	if !isLast {
+		t.Fatal("expected final frame")
+	}
+	if len(got) != 0 {
+		t.Fatalf("audio = %v", got)
+	}
+}
+
+func TestParseDoubaoWSJSONMessage(t *testing.T) {
+	data := base64.StdEncoding.EncodeToString([]byte("mp3"))
+	payload := []byte(`{"code":0,"message":"","data":"` + data + `","sequence":-1}`)
+
+	got, isLast, err := parseDoubaoWSMessage(1, payload)
+	if err != nil {
+		t.Fatalf("parseDoubaoWSMessage error = %v", err)
+	}
+	if !isLast {
+		t.Fatal("expected final frame")
+	}
+	if string(got) != "mp3" {
+		t.Fatalf("audio = %q", got)
+	}
 }

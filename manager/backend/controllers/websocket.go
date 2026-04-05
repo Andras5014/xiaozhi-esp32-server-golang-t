@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	cmap "github.com/orcaman/concurrent-map/v2"
@@ -20,9 +21,16 @@ import (
 )
 
 type WebSocketController struct {
-	DB         *gorm.DB
-	upgrader   websocket.Upgrader
-	clientsMap cmap.ConcurrentMap[string, *WebSocketClient]
+	DB                *gorm.DB
+	endpointAuthToken string
+	upgrader          websocket.Upgrader
+	clientsMap        cmap.ConcurrentMap[string, *WebSocketClient]
+}
+
+type WSClientClaims struct {
+	Purpose string `json:"purpose"`
+	UUID    string `json:"uuid"`
+	jwt.RegisteredClaims
 }
 
 // WebSocketClient 连接到Manager Backend的客户端
@@ -68,9 +76,10 @@ const (
 )
 
 // NewWebSocketController 创建WebSocket控制器
-func NewWebSocketController(db *gorm.DB) *WebSocketController {
+func NewWebSocketController(db *gorm.DB, endpointAuthToken string) *WebSocketController {
 	return &WebSocketController{
-		DB: db,
+		DB:                db,
+		endpointAuthToken: strings.TrimSpace(endpointAuthToken),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true // 允许所有来源，生产环境应该限制
@@ -82,11 +91,37 @@ func NewWebSocketController(db *gorm.DB) *WebSocketController {
 
 // HandleWebSocket 处理WebSocket连接升级
 func (ctrl *WebSocketController) HandleWebSocket(c *gin.Context) {
+	tokenString := strings.TrimSpace(c.GetHeader("Authorization"))
+	if strings.HasPrefix(strings.ToLower(tokenString), "bearer ") {
+		tokenString = strings.TrimSpace(tokenString[7:])
+	}
+	if tokenString == "" {
+		tokenString = strings.TrimSpace(c.Query("token"))
+	}
+	if tokenString == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少WebSocket认证token"})
+		return
+	}
+
+	claims, err := ctrl.parseWSClientToken(tokenString)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的WebSocket认证token"})
+		return
+	}
+	if claims.Purpose != "manager-ws-client" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的WebSocket token用途"})
+		return
+	}
+
 	// 获取UUID header
 	clientUUID := c.GetHeader("UUID")
 	if clientUUID == "" {
 		log.Printf("WebSocket连接缺少UUID header")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少UUID header"})
+		return
+	}
+	if strings.TrimSpace(claims.UUID) != "" && strings.TrimSpace(claims.UUID) != strings.TrimSpace(clientUUID) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "UUID与token不匹配"})
 		return
 	}
 
@@ -125,6 +160,20 @@ func (ctrl *WebSocketController) HandleWebSocket(c *gin.Context) {
 
 	// 启动心跳检测
 	go client.heartbeat()
+}
+
+func (ctrl *WebSocketController) parseWSClientToken(tokenString string) (*WSClientClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &WSClientClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(ctrl.endpointAuthToken), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	claims, ok := token.Claims.(*WSClientClaims)
+	if !ok || !token.Valid {
+		return nil, jwt.ErrInvalidKey
+	}
+	return claims, nil
 }
 
 // 移除客户端

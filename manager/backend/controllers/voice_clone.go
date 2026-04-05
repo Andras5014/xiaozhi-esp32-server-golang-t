@@ -40,6 +40,13 @@ type CloneProviderCapability struct {
 }
 
 var cloneProviderCapabilities = map[string]CloneProviderCapability{
+	"doubao": {
+		Enabled:            true,
+		RequiresTranscript: false,
+		MinTextLen:         0,
+		MaxTextLen:         0,
+		SupportedLangs:     map[string]bool{},
+	},
 	"minimax": {
 		Enabled:            true,
 		RequiresTranscript: false,
@@ -168,8 +175,8 @@ func (vcc *VoiceCloneController) CreateVoiceClone(c *gin.Context) {
 	}
 	rawProvider := strings.TrimSpace(ttsCfg.Provider)
 	provider := normalizeCloneProvider(rawProvider)
-	if provider != "minimax" && provider != "cosyvoice" && provider != "aliyun_qwen" && provider != "indextts_vllm" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "当前仅支持 Minimax/CosyVoice/千问/IndexTTS 提供商的声音复刻"})
+	if provider != "doubao" && provider != "minimax" && provider != "cosyvoice" && provider != "aliyun_qwen" && provider != "indextts_vllm" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "当前仅支持 豆包/Minimax/CosyVoice/千问/IndexTTS 提供商的声音复刻"})
 		return
 	}
 
@@ -771,6 +778,8 @@ func (vcc *VoiceCloneController) PreviewClonedVoice(c *gin.Context) {
 		err         error
 	)
 	switch provider {
+	case "doubao":
+		audioBytes, contentType, err = vcc.previewDoubaoClonedVoice(ctx, cfgMap, voiceID, voiceClonePreviewText)
 	case "minimax":
 		audioBytes, contentType, err = vcc.previewMinimaxClonedVoice(ctx, cfgMap, voiceID, voiceClonePreviewText)
 	case "cosyvoice":
@@ -888,12 +897,30 @@ func GetCloneProviderCapability(provider string) CloneProviderCapability {
 }
 
 func normalizeCloneProvider(provider string) string {
-	return strings.ToLower(strings.TrimSpace(provider))
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	switch provider {
+	case "doubao_ws":
+		return "doubao"
+	default:
+		return provider
+	}
 }
 
 func BuildVoiceOptionForClone(clone models.VoiceClone) VoiceOption {
 	label := fmt.Sprintf("[我的复刻] %s (%s)", clone.Name, clone.ProviderVoiceID)
 	return VoiceOption{Value: clone.ProviderVoiceID, Label: label}
+}
+
+func getTargetModelFromCloneMeta(metaJSON string) string {
+	metaJSON = strings.TrimSpace(metaJSON)
+	if metaJSON == "" {
+		return ""
+	}
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(metaJSON), &meta); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(getStringAny(meta, "target_model"))
 }
 
 func mapsKeys(m map[string]bool) []string {

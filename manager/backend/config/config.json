@@ -20,6 +20,8 @@
     "secret": "xiaozhi_admin_secret_key",
     "expire_hour": 24
   },
+  "internal_auth_token": "xiaozhi_admin_secret_key",
+  "endpoint_auth_token": "xiaozhi_mcp_openclaw_secret_key",
   "speaker_service": {
     "url": "http://127.0.0.1:9000"
   },

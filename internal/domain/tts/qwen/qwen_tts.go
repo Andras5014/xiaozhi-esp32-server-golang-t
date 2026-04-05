@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -317,7 +318,8 @@ func (p *QwenTTSProvider) TextToSpeechStream(ctx context.Context, text string, s
 		// 管道：解析 SSE -> PCM -> 解码为帧
 		pipeReader, pipeWriter := io.Pipe()
 
-		// 解析 SSE，写入原始 PCM 数据
+		// 解析 SSE，写入原始 PCM 数据。
+		// Qwen 流式返回的 audio.data 在实测中可能携带一次 WAV 头，需先剥离再按 PCM 处理。
 		go func() {
 			defer func() {
 				if err := pipeWriter.Close(); err != nil {
@@ -336,7 +338,7 @@ func (p *QwenTTSProvider) TextToSpeechStream(ctx context.Context, text string, s
 			pipeReader,
 			outputChan,
 			frameDuration,
-			"pcm", // Qwen 流式 audio.data 是 16bit PCM
+			"pcm", // parseEventStream 会在需要时剥离 WAV 头，输出纯 16bit PCM
 			sampleRate,
 		)
 		if err != nil {
@@ -376,6 +378,9 @@ func (p *QwenTTSProvider) TextToSpeechStream(ctx context.Context, text string, s
 
 // parseEventStream 使用 go-sse 解析阿里云千问的 SSE，解码 Base64 PCM 并写入管道
 func (p *QwenTTSProvider) parseEventStream(ctx context.Context, reader io.Reader, writer *io.PipeWriter, text string) error {
+	var leadingAudio bytes.Buffer
+	wroteLeadingAudio := false
+
 	for ev, evErr := range sse.Read(reader, nil) {
 		if evErr != nil {
 			return fmt.Errorf("读取千问 SSE 事件失败: %w", evErr)
@@ -407,14 +412,36 @@ func (p *QwenTTSProvider) parseEventStream(ctx context.Context, reader io.Reader
 		// 解码 Base64 PCM 数据
 		if eventResp.Output.Audio.Data != "" {
 			encoded := cleanBase64(eventResp.Output.Audio.Data)
-			pcmBytes, err := base64.StdEncoding.DecodeString(encoded)
+			audioBytes, err := base64.StdEncoding.DecodeString(encoded)
 			if err != nil {
 				log.Errorf("解码千问 Base64 PCM 失败: %v", err)
 				continue
 			}
 
-			if len(pcmBytes) > 0 {
-				if _, err := writer.Write(pcmBytes); err != nil {
+			if len(audioBytes) > 0 {
+				if !wroteLeadingAudio {
+					leadingAudio.Write(audioBytes)
+					normalized, needMore, detectedWAV, err := normalizeLeadingQwenAudio(leadingAudio.Bytes())
+					if err != nil {
+						return fmt.Errorf("解析千问流式音频头失败: %w", err)
+					}
+					if needMore {
+						continue
+					}
+					wroteLeadingAudio = true
+					if detectedWAV {
+						log.Infof("千问流式音频检测到 WAV 头，已剥离后按 PCM 处理")
+					}
+					if len(normalized) == 0 {
+						continue
+					}
+					if _, err := writer.Write(normalized); err != nil {
+						return fmt.Errorf("写入 PCM 到管道失败: %v", err)
+					}
+					continue
+				}
+
+				if _, err := writer.Write(audioBytes); err != nil {
 					return fmt.Errorf("写入 PCM 到管道失败: %v", err)
 				}
 			}
@@ -428,6 +455,64 @@ func (p *QwenTTSProvider) parseEventStream(ctx context.Context, reader io.Reader
 	}
 
 	return nil
+}
+
+func normalizeLeadingQwenAudio(data []byte) (normalized []byte, needMore bool, detectedWAV bool, err error) {
+	if len(data) < 12 {
+		return nil, true, false, nil
+	}
+
+	if !bytes.HasPrefix(data, []byte("RIFF")) || !bytes.Equal(data[8:12], []byte("WAVE")) {
+		return data, false, false, nil
+	}
+
+	offset, needMore, err := qwenWAVDataOffset(data)
+	if err != nil {
+		return nil, false, true, err
+	}
+	if needMore {
+		return nil, true, true, nil
+	}
+	if offset > len(data) {
+		return nil, false, true, fmt.Errorf("WAV data offset 越界: %d > %d", offset, len(data))
+	}
+	return data[offset:], false, true, nil
+}
+
+func qwenWAVDataOffset(data []byte) (offset int, needMore bool, err error) {
+	if len(data) < 12 {
+		return 0, true, nil
+	}
+	if !bytes.HasPrefix(data, []byte("RIFF")) || !bytes.Equal(data[8:12], []byte("WAVE")) {
+		return 0, false, fmt.Errorf("不是有效的 WAV 头")
+	}
+
+	offset = 12
+	for {
+		if len(data) < offset+8 {
+			return 0, true, nil
+		}
+
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		if chunkSize < 0 {
+			return 0, false, fmt.Errorf("非法 WAV chunk size: %d", chunkSize)
+		}
+		offset += 8
+
+		if chunkID == "data" {
+			return offset, false, nil
+		}
+
+		nextOffset := offset + chunkSize
+		if chunkSize%2 == 1 {
+			nextOffset++
+		}
+		if len(data) < nextOffset {
+			return 0, true, nil
+		}
+		offset = nextOffset
+	}
 }
 
 // SetVoice 设置音色

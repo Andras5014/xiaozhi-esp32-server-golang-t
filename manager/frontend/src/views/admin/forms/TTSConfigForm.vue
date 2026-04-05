@@ -29,8 +29,13 @@
       <el-form-item label="访问令牌" prop="doubao_ws.access_token">
         <el-input v-model="model.doubao_ws.access_token" placeholder="请输入访问令牌" type="password" show-password />
       </el-form-item>
-      <el-form-item label="集群" prop="doubao_ws.cluster">
-        <el-input v-model="model.doubao_ws.cluster" placeholder="请输入集群名称" />
+      <el-form-item label="模型" prop="doubao_ws.model">
+        <el-select v-model="model.doubao_ws.model" placeholder="请选择模型" style="width: 100%">
+          <el-option v-for="option in DOUBAO_MODEL_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="资源 ID" prop="doubao_ws.resource_id">
+        <el-input v-model="model.doubao_ws.resource_id" placeholder="可选；如 TTS-SeedTTS2.xxxxx，优先使用控制台实例 ID" />
       </el-form-item>
       <el-form-item label="音色" prop="doubao_ws.voice">
         <el-select
@@ -46,11 +51,8 @@
           <el-option v-for="option in voiceOptionsList" :key="option.value" :label="option.label" :value="option.value" />
         </el-select>
       </el-form-item>
-      <el-form-item label="WebSocket主机" prop="doubao_ws.ws_host">
-        <el-input v-model="model.doubao_ws.ws_host" placeholder="请输入WebSocket主机地址" />
-      </el-form-item>
-      <el-form-item label="使用流式" prop="doubao_ws.use_stream">
-        <el-switch v-model="model.doubao_ws.use_stream" />
+      <el-form-item label="WebSocket URL" prop="doubao_ws.ws_url" label-width="unset">
+        <el-input v-model="model.doubao_ws.ws_url" placeholder="wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream" />
       </el-form-item>
     </template>
 
@@ -470,6 +472,15 @@ import { ref, computed } from 'vue'
 import { TTS_PROVIDER_OPTIONS } from './ttsProviderOptions'
 import XunfeiCommonConfig from './XunfeiCommonConfig.vue'
 
+const DOUBAO_MODEL_OPTIONS = [
+  { label: '豆包语音合成 1.1', value: 'seed-tts-1.1' },
+  { label: '豆包语音合成 2.0 Standard', value: 'seed-tts-2.0-standard' },
+  { label: '豆包语音合成 2.0 Expressive', value: 'seed-tts-2.0-expressive' },
+  { label: '豆包声音复刻 1.0', value: 'seed-icl-1.0' },
+  { label: '豆包声音复刻 2.0 Standard', value: 'seed-icl-2.0-standard' },
+  { label: '豆包声音复刻 2.0 Expressive', value: 'seed-icl-2.0-expressive' }
+]
+
 const props = defineProps({
   model: { type: Object, required: true },
   rules: { type: Object, default: () => ({}) },
@@ -505,10 +516,10 @@ function getJsonData() {
     case 'doubao_ws':
       config.appid = form.doubao_ws?.appid
       config.access_token = form.doubao_ws?.access_token
-      config.cluster = form.doubao_ws?.cluster
+      config.model = form.doubao_ws?.model || 'seed-tts-2.0-standard'
+      config.resource_id = form.doubao_ws?.resource_id
       config.voice = form.doubao_ws?.voice
-      config.ws_host = form.doubao_ws?.ws_host
-      config.use_stream = form.doubao_ws?.use_stream
+      config.ws_url = form.doubao_ws?.ws_url || 'wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream'
       break
     case 'edge':
       config.voice = form.edge?.voice

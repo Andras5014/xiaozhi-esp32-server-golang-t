@@ -4,9 +4,8 @@ import (
 	"bytes"
 	"net/http"
 
-	"github.com/google/uuid"
-
 	"xiaozhi-esp32-server-golang/internal/domain/asr/doubao/common"
+	"xiaozhi-esp32-server-golang/internal/domain/doubaoapi"
 )
 
 type AsrRequestHeader struct {
@@ -62,16 +61,5 @@ func DefaultHeader() *AsrRequestHeader {
 }
 
 func NewAuthHeader(appKey, accessKey, resourceID, connectID string) http.Header {
-	reqid := uuid.New().String()
-	if connectID == "" {
-		connectID = reqid
-	}
-	header := http.Header{}
-
-	header.Add("X-Api-Resource-Id", resourceID)
-	header.Add("X-Api-Connect-Id", connectID)
-	header.Add("X-Api-Request-Id", reqid)
-	header.Add("X-Api-Access-Key", accessKey)
-	header.Add("X-Api-App-Key", appKey)
-	return header
+	return doubaoapi.NewASRHeaders(appKey, accessKey, resourceID, connectID)
 }

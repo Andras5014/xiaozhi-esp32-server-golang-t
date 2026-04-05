@@ -47,7 +47,7 @@ func generateChallenge() string {
 }
 
 // 1. 判断设备是否已激活
-// GET /api/public/device/check-activation?device_id=xxx&client_id=xxx
+// GET /api/internal/device/check-activation?device_id=xxx&client_id=xxx
 func (dac *DeviceActivationController) CheckDeviceActivation(c *gin.Context) {
 	deviceId := c.Query("device_id")
 	//clientId := c.Query("client_id")
@@ -89,7 +89,7 @@ func (dac *DeviceActivationController) CheckDeviceActivation(c *gin.Context) {
 }
 
 // 2. 获取激活信息
-// GET /api/public/device/activation-info?device_id=xxx&client_id=xxx
+// GET /api/internal/device/activation-info?device_id=xxx&client_id=xxx
 func (dac *DeviceActivationController) GetActivationInfo(c *gin.Context) {
 	deviceId := c.Query("device_id")
 	//clientId := c.Query("client_id")
@@ -185,7 +185,7 @@ func verifyHMAC(challenge, secretKey, providedHmac string) bool {
 }
 
 // 3. 设备激活接口
-// POST /api/public/device/activate
+// POST /api/internal/device/activate
 func (dac *DeviceActivationController) ActivateDevice(c *gin.Context) {
 	var req struct {
 		DeviceId     string `json:"device_id" binding:"required"`

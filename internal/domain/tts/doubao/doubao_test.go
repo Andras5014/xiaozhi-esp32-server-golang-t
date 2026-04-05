@@ -1,151 +1,198 @@
 package doubao
 
 import (
-	"context"
-	"net/http"
-	"os"
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
-	"time"
-
-	"xiaozhi-esp32-server-golang/internal/data/client"
-	"xiaozhi-esp32-server-golang/internal/util"
 )
 
-// 测试创建TTS提供者
 func TestNewDoubaoTTSProvider(t *testing.T) {
 	config := map[string]interface{}{
-		"appid":         "test_app_id",
-		"access_token":  "test_token",
-		"cluster":       "test_cluster",
-		"voice":         "test_voice",
-		"api_url":       "https://api.test.com",
-		"authorization": "Bearer ",
+		"appid":        "test_app_id",
+		"access_token": "test_token",
+		"model":        "seed-tts-1.1",
+		"voice":        "BV001_streaming",
+		"api_url":      "https://api.test.com/v3/tts/unidirectional",
 	}
 
 	provider := NewDoubaoTTSProvider(config)
-
 	if provider.AppID != "test_app_id" {
-		t.Errorf("AppID不匹配，期望: %s, 实际: %s", "test_app_id", provider.AppID)
+		t.Fatalf("AppID = %q", provider.AppID)
 	}
-	if provider.Voice != "test_voice" {
-		t.Errorf("Voice不匹配，期望: %s, 实际: %s", "test_voice", provider.Voice)
+	if provider.AccessToken != "test_token" {
+		t.Fatalf("AccessToken = %q", provider.AccessToken)
 	}
-	if provider.Header["Authorization"] != "Bearer test_token" {
-		t.Errorf("Authorization不匹配，期望: %s, 实际: %s", "Bearer test_token", provider.Header["Authorization"])
+	if provider.Model != "seed-tts-1.1" {
+		t.Fatalf("Model = %q", provider.Model)
 	}
-}
-
-// 测试GetVoiceInfo方法
-func TestGetVoiceInfo(t *testing.T) {
-	provider := &DoubaoTTSProvider{
-		Voice: "xiaomei",
+	if provider.Voice != "BV001_streaming" {
+		t.Fatalf("Voice = %q", provider.Voice)
 	}
-
-	info := provider.GetVoiceInfo()
-	if info["voice"] != "xiaomei" {
-		t.Errorf("语音信息不匹配，期望voice: %s, 实际: %s", "xiaomei", info["voice"])
-	}
-	if info["type"] != "doubao" {
-		t.Errorf("类型不匹配，期望type: %s, 实际: %s", "doubao", info["type"])
+	if provider.APIURL != "https://api.test.com/v3/tts/unidirectional" {
+		t.Fatalf("APIURL = %q", provider.APIURL)
 	}
 }
 
-// 测试生成UUID
-func TestGenerateUUID(t *testing.T) {
-	uuid := generateUUID()
-	if len(uuid) == 0 {
-		t.Error("生成的UUID为空")
-	}
-
-	// 测试多次生成的UUID是否不同
-	anotherUUID := generateUUID()
-	if uuid == anotherUUID {
-		t.Error("两次生成的UUID相同，期望不同的值")
-	}
-}
-
-// 注意：以下是一个简化的WavToOpus测试
-// 如果要全面测试，需要准备有效的WAV数据并验证转换结果
-func TestWavToOpus_InvalidData(t *testing.T) {
-	// 测试无效的WAV数据
-	_, err := util.WavToOpus([]byte("这不是WAV数据"), client.SampleRate, client.Channels, client.FrameDuration)
-	if err == nil {
-		t.Error("期望处理无效数据时返回错误，但没有")
-	}
-}
-
-// MockRoundTripper 模拟HTTP请求的响应
-type MockRoundTripper struct {
-	Response *http.Response
-	Err      error
-}
-
-func (m *MockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return m.Response, m.Err
-}
-
-// 使用字节跳动配置进行测试
-func TestByteProviderTextToSpeech(t *testing.T) {
-	// 配置测试参数 - 使用用户提供的实际配置
-	config := map[string]interface{}{
-		"api_url":       "https://openspeech.bytedance.com/api/v1/tts",
-		"voice":         "BV001_streaming",
-		"authorization": "Bearer;",
-		"appid":         "6886011847",
-		"access_token":  "access_token",
-		"cluster":       "volcano_tts",
-	}
-
-	t.Logf("使用配置: API URL=%s, Voice=%s, AppID=%s",
-		config["api_url"], config["voice"], config["appid"])
-
-	// 创建TTS提供者
-	provider := NewDoubaoTTSProvider(config)
-
-	// 测试文本到语音转换
-	testText := "这是一个测试，使用字节跳动TTS服务生成语音"
-	t.Logf("测试文本: %s", testText)
-
-	// 确保输出目录存在
-	outputDir := "tmp/"
-	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			t.Logf("无法创建输出目录: %v", err)
-		}
-	}
-
-	// 使用TextToSpeech方法
-	audioFrames, err := provider.TextToSpeech(context.Background(), testText)
+func TestResolveDoubaoTTSModelDefaults(t *testing.T) {
+	got, err := resolveDoubaoTTSModel("", "BV001_streaming")
 	if err != nil {
-		t.Fatalf("TextToSpeech失败: %v", err)
+		t.Fatalf("resolveDoubaoTTSModel default error = %v", err)
+	}
+	if got.ConfigModel != defaultDoubaoTTSModel {
+		t.Fatalf("ConfigModel = %q", got.ConfigModel)
+	}
+	if got.ResourceID != resourceSeedTTS10 {
+		t.Fatalf("ResourceID = %q", got.ResourceID)
+	}
+	if got.RequestModel != modelSeedTTS11 {
+		t.Fatalf("RequestModel = %q", got.RequestModel)
+	}
+}
+
+func TestResolveDoubaoTTSModelCloneVoice(t *testing.T) {
+	got, err := resolveDoubaoTTSModel("", "ICL_demo_voice")
+	if err != nil {
+		t.Fatalf("resolveDoubaoTTSModel clone error = %v", err)
+	}
+	if got.ResourceID != resourceSeedICL10 {
+		t.Fatalf("ResourceID = %q", got.ResourceID)
+	}
+	if got.ConfigModel != modelSeedICL10 {
+		t.Fatalf("ConfigModel = %q", got.ConfigModel)
+	}
+}
+
+func TestResolveDoubaoTTSModelSaturnVoiceDefaultsToTTS20(t *testing.T) {
+	got, err := resolveDoubaoTTSModel("", "saturn_zh_female_cancan_tob")
+	if err != nil {
+		t.Fatalf("resolveDoubaoTTSModel saturn error = %v", err)
+	}
+	if got.ResourceID != resourceSeedTTS20 {
+		t.Fatalf("ResourceID = %q", got.ResourceID)
+	}
+	if got.ConfigModel != modelSeedTTS20Standard {
+		t.Fatalf("ConfigModel = %q", got.ConfigModel)
+	}
+}
+
+func TestResolveDoubaoTTSModelBigTTSVoiceDefaultsToTTS20(t *testing.T) {
+	got, err := resolveDoubaoTTSModel("", "zh_female_qinqienvsheng_moon_bigtts")
+	if err != nil {
+		t.Fatalf("resolveDoubaoTTSModel bigtts error = %v", err)
+	}
+	if got.ResourceID != resourceSeedTTS20 {
+		t.Fatalf("ResourceID = %q", got.ResourceID)
+	}
+	if got.ConfigModel != modelSeedTTS20Standard {
+		t.Fatalf("ConfigModel = %q", got.ConfigModel)
+	}
+}
+
+func TestResolveDoubaoTTSModelUpgradesLegacyTTS10ForBigTTSVoice(t *testing.T) {
+	got, err := resolveDoubaoTTSModel(modelSeedTTS11, "zh_female_qinqienvsheng_moon_bigtts")
+	if err != nil {
+		t.Fatalf("resolveDoubaoTTSModel legacy tts1.0 error = %v", err)
+	}
+	if got.ResourceID != resourceSeedTTS20 {
+		t.Fatalf("ResourceID = %q", got.ResourceID)
+	}
+	if got.ConfigModel != modelSeedTTS20Standard {
+		t.Fatalf("ConfigModel = %q", got.ConfigModel)
+	}
+}
+
+func TestResolveDoubaoTTSModelRejectsPublicVoiceWithICL(t *testing.T) {
+	if _, err := resolveDoubaoTTSModel(modelSeedICL10, "BV001_streaming"); err == nil {
+		t.Fatal("expected public voice with ICL model to fail")
+	}
+}
+
+func TestBuildDoubaoWSAttemptModelsWithExplicitResourceAddsFallback(t *testing.T) {
+	derived, err := resolveDoubaoTTSModel(modelSeedTTS20Standard, "zh_female_vv_uranus_bigtts")
+	if err != nil {
+		t.Fatalf("resolveDoubaoTTSModel error = %v", err)
 	}
 
-	// 计算总大小
-	var totalSize int
-	for _, frame := range audioFrames {
-		totalSize += len(frame)
+	got := buildDoubaoWSAttemptModels(derived, "TTS-SeedTTS2.02000000628041826146", "zh_female_vv_uranus_bigtts")
+	if len(got) != 3 {
+		t.Fatalf("attempt model len = %d", len(got))
+	}
+	if got[0].ResourceID != "TTS-SeedTTS2.02000000628041826146" {
+		t.Fatalf("first resource = %q", got[0].ResourceID)
+	}
+	if got[1].ResourceID != resourceSeedTTS20 {
+		t.Fatalf("second resource = %q", got[1].ResourceID)
+	}
+	if got[2].ResourceID != resourceSeedTTS10 {
+		t.Fatalf("third resource = %q", got[2].ResourceID)
+	}
+}
+
+func TestSummarizeDoubaoWSAttemptErrorResourceNotGranted(t *testing.T) {
+	err := summarizeDoubaoWSAttemptError(
+		"zh_female_vv_uranus_bigtts",
+		resolvedTTSModel{ConfigModel: modelSeedTTS20Standard, ResourceID: "TTS-SeedTTS2.02000000628041826146"},
+		[]string{"TTS-SeedTTS2.02000000628041826146"},
+		[]error{errors.New(`建立豆包 WebSocket TTS 连接失败: websocket handshake status=403 body={"error":"[resource_id=TTS-SeedTTS2.02000000628041826146] requested resource not granted"}`)},
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "resource_id 未授权") {
+		t.Fatalf("unexpected error = %v", err)
+	}
+}
+
+func TestSummarizeDoubaoWSAttemptErrorExplicitUnauthorizedThenMismatch(t *testing.T) {
+	err := summarizeDoubaoWSAttemptError(
+		"zh_female_vv_uranus_bigtts",
+		resolvedTTSModel{ConfigModel: modelSeedTTS20Standard, ResourceID: "TTS-SeedTTS2.02000000628041826146"},
+		[]string{"TTS-SeedTTS2.02000000628041826146", resourceSeedTTS20},
+		[]error{
+			errors.New(`建立豆包 WebSocket TTS 连接失败: websocket handshake status=403 body={"error":"[resource_id=TTS-SeedTTS2.02000000628041826146] requested resource not granted"}`),
+			errors.New(`resource ID is mismatched with speaker related resource`),
+		},
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "显式 resource_id 对该 app/token 未授权") {
+		t.Fatalf("unexpected error = %v", err)
+	}
+}
+
+func TestNewDoubaoTTSV3RequestUsesNestedReqParams(t *testing.T) {
+	req := newDoubaoTTSV3Request("你好", "voice-demo", 24000, modelSeedTTS11)
+
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request error = %v", err)
 	}
 
-	// 合并所有帧以便保存到文件
-	mergedAudio := make([]byte, totalSize)
-	offset := 0
-	for _, frame := range audioFrames {
-		copy(mergedAudio[offset:], frame)
-		offset += len(frame)
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal request error = %v", err)
 	}
 
-	// 保存结果
-	outputPath := outputDir + "byte_test_" + time.Now().Format("20060102_150405") + ".opus"
-	if err := os.WriteFile(outputPath, mergedAudio, 0644); err != nil {
-		t.Logf("保存音频文件失败: %v", err)
-	} else {
-		t.Logf("音频文件已保存到: %s", outputPath)
+	if _, exists := payload["text"]; exists {
+		t.Fatal("unexpected top-level text field")
 	}
-
-	// 验证结果
-	if len(audioFrames) == 0 {
-		t.Error("生成的音频帧为空")
-	} else {
-		t.Logf("生成的音频帧数量: %d, 总大小: %d 字节", len(audioFrames), totalSize)
+	reqParams, ok := payload["req_params"].(map[string]any)
+	if !ok {
+		t.Fatalf("req_params missing: %#v", payload)
+	}
+	if reqParams["text"] != "你好" {
+		t.Fatalf("req_params.text = %#v", reqParams["text"])
+	}
+	if reqParams["speaker"] != "voice-demo" {
+		t.Fatalf("req_params.speaker = %#v", reqParams["speaker"])
+	}
+	audioParams, ok := reqParams["audio_params"].(map[string]any)
+	if !ok {
+		t.Fatalf("audio_params missing: %#v", reqParams)
+	}
+	if audioParams["format"] != defaultDoubaoAudioFmt {
+		t.Fatalf("audio_params.format = %#v", audioParams["format"])
 	}
 }

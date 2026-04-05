@@ -18,6 +18,7 @@ import (
 	"xiaozhi-esp32-server-golang/internal/util"
 	log "xiaozhi-esp32-server-golang/logger"
 
+	"github.com/gopxl/beep"
 	sse "github.com/tmaxmax/go-sse"
 )
 
@@ -25,6 +26,11 @@ import (
 var (
 	httpClient     *http.Client
 	httpClientOnce sync.Once
+)
+
+const (
+	zhipuDefaultSampleRate = 24000
+	zhipuLeadingFadeInMs   = 5
 )
 
 // 获取配置了连接池的HTTP客户端
@@ -208,13 +214,30 @@ func (p *ZhipuTTSProvider) TextToSpeech(ctx context.Context, text string, sample
 
 	// 根据音频格式处理响应（智谱只支持 wav 和 pcm）
 	if p.ResponseFormat == "wav" || p.ResponseFormat == "pcm" {
+		audioReader := io.ReadCloser(resp.Body)
+		if strings.EqualFold(p.ResponseFormat, "pcm") {
+			pcmData, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("读取智谱 PCM 数据失败: %v", err)
+			}
+			audioReader = io.NopCloser(bytes.NewReader(
+				applyPCM16MonoLeadingFadeIn(pcmData, leadingFadeInSampleCount(zhipuDefaultSampleRate, zhipuLeadingFadeInMs)),
+			))
+		}
+
 		// 创建一个通道来收集音频帧
 		outputChan := make(chan []byte, 1000)
 
 		// 创建音频解码器
-		decoder, err := util.CreateAudioDecoderWithSampleRate(ctx, resp.Body, outputChan, frameDuration, p.ResponseFormat, sampleRate)
+		decoder, err := util.CreateAudioDecoderWithSampleRate(ctx, audioReader, outputChan, frameDuration, p.ResponseFormat, sampleRate)
 		if err != nil {
 			return nil, fmt.Errorf("创建音频解码器失败: %v", err)
+		}
+		if strings.EqualFold(p.ResponseFormat, "pcm") {
+			decoder.WithFormat(beep.Format{
+				SampleRate:  beep.SampleRate(zhipuDefaultSampleRate),
+				NumChannels: 1,
+			})
 		}
 
 		// 启动解码过程
@@ -336,6 +359,12 @@ func (p *ZhipuTTSProvider) TextToSpeechStream(ctx context.Context, text string, 
 				close(outputChan)
 				return
 			}
+			if strings.EqualFold(responseFormat, "pcm") {
+				decoder.WithFormat(beep.Format{
+					SampleRate:  beep.SampleRate(zhipuDefaultSampleRate),
+					NumChannels: 1,
+				})
+			}
 
 			// 启动解码过程
 			if err := decoder.Run(startTs); err != nil {
@@ -370,6 +399,8 @@ func (p *ZhipuTTSProvider) parseEventStream(ctx context.Context, reader io.Reade
 	readConfig := &sse.ReadConfig{
 		MaxEventSize: 4 * 1024 * 1024, // 4MB，足够处理大型 base64 编码的音频数据
 	}
+	fadeTotalSamples := 0
+	fadeSamplesRemaining := -1
 
 	for ev, evErr := range sse.Read(reader, readConfig) {
 		if evErr != nil {
@@ -410,10 +441,31 @@ func (p *ZhipuTTSProvider) parseEventStream(ctx context.Context, reader io.Reade
 		// 提取每个 choice 的 content 字段并独立处理
 		for _, choice := range eventResp.Choices {
 			if choice.Delta.Content != "" {
-				//log.Debugf("智谱 TTS 流式 return_format(返回): %s", choice.Delta.ReturnFormat)
-				// 每个 content 独立解码并写入
-				if err := p.decodeAndWriteContent(choice.Delta.Content, writer); err != nil {
+				decodedData, err := p.decodeAudioContent(choice.Delta.Content)
+				if err != nil {
 					return fmt.Errorf("处理 content 失败: %v", err)
+				}
+
+				returnFormat := strings.TrimSpace(choice.Delta.ReturnFormat)
+				if returnFormat == "" {
+					returnFormat = p.ResponseFormat
+				}
+				if strings.EqualFold(returnFormat, "pcm") {
+					if fadeSamplesRemaining < 0 {
+						sampleRate := choice.Delta.ReturnSampleRate
+						if sampleRate < 1 {
+							sampleRate = zhipuDefaultSampleRate
+						}
+						fadeTotalSamples = leadingFadeInSampleCount(sampleRate, zhipuLeadingFadeInMs)
+						fadeSamplesRemaining = fadeTotalSamples
+					}
+					applyPCM16MonoLeadingFadeInInPlace(decodedData, fadeTotalSamples, &fadeSamplesRemaining)
+				}
+
+				if len(decodedData) > 0 {
+					if _, err := writer.Write(decodedData); err != nil {
+						return fmt.Errorf("写入管道失败: %v", err)
+					}
 				}
 			}
 		}
@@ -430,16 +482,11 @@ func previewString(s string, n int) string {
 	return s[:n]
 }
 
-// decodeAndWriteContent 解码单个 content 字段并写入管道
+// decodeAudioContent 解码单个 content 字段
 // content: base64 或 hex 编码的音频数据字符串
-// writer: 管道写入端
-func (p *ZhipuTTSProvider) decodeAndWriteContent(content string, writer *io.PipeWriter) error {
+func (p *ZhipuTTSProvider) decodeAudioContent(content string) ([]byte, error) {
 	if content == "" {
-		return nil
-	}
-
-	if content == "" {
-		return nil
+		return nil, nil
 	}
 
 	// 根据 encode_format 解码
@@ -457,17 +504,52 @@ func (p *ZhipuTTSProvider) decodeAndWriteContent(content string, writer *io.Pipe
 	}
 
 	if decodeErr != nil {
-		return fmt.Errorf("解码音频数据失败: %v, 数据长度: %d", decodeErr, len(content))
+		return nil, fmt.Errorf("解码音频数据失败: %v, 数据长度: %d", decodeErr, len(content))
 	}
 
-	// 将解码后的数据写入管道
-	if len(decodedData) > 0 {
-		if _, err := writer.Write(decodedData); err != nil {
-			return fmt.Errorf("写入管道失败: %v", err)
-		}
+	return decodedData, nil
+}
+
+func leadingFadeInSampleCount(sampleRate int, fadeMs int) int {
+	if sampleRate < 1 {
+		sampleRate = zhipuDefaultSampleRate
+	}
+	if fadeMs < 1 {
+		return 0
+	}
+	samples := sampleRate * fadeMs / 1000
+	if samples < 1 {
+		return 1
+	}
+	return samples
+}
+
+func applyPCM16MonoLeadingFadeIn(data []byte, remainingSamples int) []byte {
+	if len(data) == 0 || remainingSamples <= 0 {
+		return data
+	}
+	cloned := make([]byte, len(data))
+	copy(cloned, data)
+	applyPCM16MonoLeadingFadeInInPlace(cloned, remainingSamples, &remainingSamples)
+	return cloned
+}
+
+func applyPCM16MonoLeadingFadeInInPlace(data []byte, totalSamples int, remainingSamples *int) {
+	if len(data) < 2 || totalSamples <= 0 || remainingSamples == nil || *remainingSamples <= 0 {
+		return
 	}
 
-	return nil
+	samplePairs := len(data) / 2
+	for i := 0; i < samplePairs && *remainingSamples > 0; i++ {
+		offset := i * 2
+		sample := int16(uint16(data[offset]) | uint16(data[offset+1])<<8)
+		appliedIndex := totalSamples - *remainingSamples
+		scaled := int32(sample) * int32(appliedIndex) / int32(totalSamples)
+		binarySample := uint16(int16(scaled))
+		data[offset] = byte(binarySample)
+		data[offset+1] = byte(binarySample >> 8)
+		*remainingSamples = *remainingSamples - 1
+	}
 }
 
 // SetVoice 设置音色参数

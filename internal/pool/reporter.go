@@ -41,6 +41,7 @@ func GetStatsReporter() *StatsReporter {
 		// 创建 HTTP 客户端
 		managerClient := http.NewManagerClient(http.ManagerClientConfig{
 			BaseURL:    baseURL,
+			AuthToken:  util.GetManagerAuthToken(),
 			Timeout:    5 * time.Second,
 			MaxRetries: 2,
 		})

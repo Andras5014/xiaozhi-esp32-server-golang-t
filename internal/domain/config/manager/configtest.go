@@ -26,6 +26,10 @@ const DefaultTestWavPath = "internal/testdata/config_test.wav"
 
 // DefaultTestText LLM/TTS 固定测试文本
 const DefaultTestText = "配置测试"
+const (
+	defaultLLMTestTimeout  = 15 * time.Second
+	thinkingLLMTestTimeout = 30 * time.Second
+)
 
 // 用于 VAD/ASR 的备用 PCM：约 1 秒模拟语音 16kHz 单声道，无文件时使用
 // 使用合成噪声模拟真实语音，以便 ASR 服务端能正常处理（特别是 Manual 模式需要 commit）
@@ -42,7 +46,7 @@ var fallbackPCM = func() []float32 {
 		sample += float32(0.15 * math.Sin(2*math.Pi*t*1200)) // 谐波，幅度 0.15
 		sample += float32(0.1 * math.Sin(2*math.Pi*t*2000))  // 谐波，幅度 0.1
 		// 添加噪声，大幅增加噪声水平
-		sample += (float32(i%100)-50) / 2000 // 噪声幅度增加到 0.05
+		sample += (float32(i%100) - 50) / 2000 // 噪声幅度增加到 0.05
 		// 应用包络（淡入淡出）
 		env := float32(1.0)
 		if i < 1000 {
@@ -235,14 +239,20 @@ func RunConfigTest(data map[string]interface{}, testText string) (vadResult, asr
 				log.Debugf("[config_test] LLM config_id=%s 配置格式无效", configID)
 				continue
 			}
-			wrapper, err := pool.Acquire[llm.LLMProvider]("llm", configID, cfg)
+			testCfg := cloneConfigMap(cfg)
+			testCfg["__enable_reasoning_content_detection"] = true
+			wrapper, err := pool.Acquire[llm.LLMProvider]("llm", configID, testCfg)
 			if err != nil {
 				llmResult[configID] = map[string]interface{}{"ok": false, "message": err.Error()}
 				log.Debugf("[config_test] LLM config_id=%s Acquire 失败: %v", configID, err)
 				continue
 			}
 			llmProvider := wrapper.GetProvider()
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			timeout := defaultLLMTestTimeout
+			if llmThinkingEnabled(cfg) {
+				timeout = thinkingLLMTestTimeout
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			t0 := time.Now()
 			msgChan := llmProvider.ResponseWithContext(ctx, "config_test", []*schema.Message{
 				{Role: "user", Content: testText},
@@ -261,6 +271,9 @@ func RunConfigTest(data map[string]interface{}, testText string) (vadResult, asr
 			cancel()
 			pool.Release(wrapper)
 			resultBase := map[string]interface{}{"first_packet_ms": firstPacketMs}
+			if reporter, ok := llmProvider.(interface{ HasReasoningContent() bool }); ok {
+				resultBase["reasoning_content_returned"] = reporter.HasReasoningContent()
+			}
 			if gotMessage && llm.IsLLMErrorMessage(firstMsg) {
 				errMsg := llm.LLMErrorMessage(firstMsg)
 				resultBase["ok"] = false
@@ -342,11 +355,33 @@ func RunConfigTest(data map[string]interface{}, testText string) (vadResult, asr
 	return vadResult, asrResult, llmResult, ttsResult
 }
 
+func cloneConfigMap(src map[string]interface{}) map[string]interface{} {
+	if src == nil {
+		return map[string]interface{}{}
+	}
+	dst := make(map[string]interface{}, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
+}
+
+func llmThinkingEnabled(cfg map[string]interface{}) bool {
+	rawThinking, ok := cfg["thinking"].(map[string]interface{})
+	if !ok || len(rawThinking) == 0 {
+		return false
+	}
+
+	mode, _ := rawThinking["mode"].(string)
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	return mode != "" && mode != "default"
 }
 
 // mapKeys 返回 map 的键列表，用于 debug 日志
