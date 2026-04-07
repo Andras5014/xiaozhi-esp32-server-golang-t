@@ -39,8 +39,8 @@ func InitChatLocalMCPTools() {
 		},*/
 		"exit_conversation": {
 			Name:        "exit_conversation",
-			Description: "当你判断用户想要结束当前对话时调用此工具。包括但不限于：直接告别（再见、拜拜、bye）、表达不想继续聊（不聊了、先这样吧、我忙了、我要走了、今天就到这里）、要求停止说话（别说了、闭嘴、停、安静）、表达厌烦或拒绝继续（够了、烦死了、不想听了）。注意：如果用户只是要求你换个话题或停止当前回答但仍想继续对话，不要调用此工具。",
-			Params:      ExitConversationParams{},
+			Description: "当用户明确表示要结束对话、退出系统或告别时使用，用于优雅地关闭当前聊天会话",
+			Params:      struct{}{},
 			Handle:      exitConversationHandler,
 		},
 		"clear_conversation_history": {
@@ -108,10 +108,6 @@ func RegisterLocalMcpFunc(name string, description string, params any, handle mc
 		return err
 	}
 	return nil
-}
-
-type ExitConversationParams struct {
-	Reason string `json:"reason" description:"用户想结束对话的原因，如：用户告别、用户要求停止、用户表达厌烦等" required:"false"`
 }
 
 type SwitchDeviceRoleParams struct {

@@ -254,14 +254,11 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 					//log.Infof("检测到语音, len: %d", len(pcmData))
 					state.SetClientHaveVoice(true)
 					state.SetClientHaveVoiceLastTime(time.Now().UnixMilli())
+					if !state.Asr.AutoEnd {
+						state.Vad.ResetIdleDuration()
+					}
 					// 累积检测到声音的时长（同时更新一次过程中的时长）
 					state.Vad.AddVoiceDuration(int64(frameDurationMs))
-					if !state.Asr.AutoEnd {
-						// 只有持续语音超过 300ms 才重置空闲计时器，避免环境噪声误触导致空闲超时永远无法触发
-						if state.Vad.GetVoiceDuration() >= 300 {
-							state.Vad.ResetIdleDuration()
-						}
-					}
 
 					continuousVoiceDuration := state.Vad.GetVoiceContinuousDuration()
 					if state.IsRealTime() && viper.GetInt("chat.realtime_mode") == 1 && continuousVoiceDuration > 360 {
@@ -447,7 +444,7 @@ func (a *ASRManager) RestartAsrRecognition(ctx context.Context) error {
 
 	// 重新创建ASR上下文和通道
 	state.Asr.Ctx, state.Asr.Cancel = context.WithCancel(ctx)
-	state.Asr.AsrAudioChannel = make(chan []float32, AsrAudioChannelCap)
+	state.Asr.AsrAudioChannel = make(chan []float32, 100)
 
 	// 重新启动流式识别
 	asrResultChannel, err := asrProvider.StreamingRecognize(state.Asr.Ctx, state.Asr.AsrAudioChannel)

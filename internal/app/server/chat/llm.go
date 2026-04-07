@@ -1204,10 +1204,6 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 		// 同步处理：资源会在 handleLLMWithContextAndTools 的 defer 中自动释放
 		_, err := l.HandleLLMResponseChannelSync(ctx, userMessage, responseSentences, einoTools)
 		if err != nil {
-			if isExpectedCancellationError(err) {
-				log.Debugf("LLM响应处理已取消, seesionID: %s, error: %v", l.clientState.SessionID, err)
-				return nil
-			}
 			log.Errorf("处理 LLM 响应失败, seesionID: %s, error: %v", l.clientState.SessionID, err)
 			return err
 		}
@@ -1215,10 +1211,6 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 		// 异步处理：资源会在 handleLLMWithContextAndTools 的 defer 中自动释放
 		err = l.HandleLLMResponseChannelAsync(ctx, userMessage, responseSentences)
 		if err != nil {
-			if isExpectedCancellationError(err) {
-				log.Debugf("LLM响应处理已取消, seesionID: %s, error: %v", l.clientState.SessionID, err)
-				return nil
-			}
 			log.Errorf("处理 LLM 响应失败, seesionID: %s, error: %v", l.clientState.SessionID, err)
 		}
 	}
@@ -1312,8 +1304,6 @@ func (l *LLMManager) GetMessages(ctx context.Context, userMessage *schema.Messag
 	// 添加当前时间和日期信息
 	now := time.Now()
 	systemPrompt += fmt.Sprintf("\n当前时间和日期: %s %s", now.Format("2006年01月02日 15:04:05"), now.Format("Monday"))
-
-	systemPrompt += "\n注意：当用户表达想要结束对话、告别、要求你停止说话、表示不想继续聊天时，你必须调用 exit_conversation 工具来结束会话，而不是仅仅用语言回复。"
 
 	if memoryMode == MemoryModeLong && l.clientState.MemoryContext != "" {
 		systemPrompt += fmt.Sprintf("\n用户个性化信息: \n%s", l.clientState.MemoryContext)
@@ -1494,22 +1484,6 @@ func cloneMessageForRequest(msg *schema.Message) *schema.Message {
 	if msg.ResponseMeta != nil {
 		respMetaCopy := *msg.ResponseMeta
 		msgCopy.ResponseMeta = &respMetaCopy
-	}
-	if msgCopy.Role == schema.Assistant && strings.TrimSpace(msgCopy.Content) == "" && len(msgCopy.ToolCalls) > 0 {
-		// 部分 OpenAI 兼容接口不接受 content 为空的 assistant/tool_calls 消息，
-		// 这里仅在请求阶段补一个稳定占位文本，不影响历史存储结构。
-		toolNames := make([]string, 0, len(msgCopy.ToolCalls))
-		for _, toolCall := range msgCopy.ToolCalls {
-			name := strings.TrimSpace(toolCall.Function.Name)
-			if name != "" {
-				toolNames = append(toolNames, name)
-			}
-		}
-		if len(toolNames) > 0 {
-			msgCopy.Content = "工具调用: " + strings.Join(toolNames, ", ")
-		} else {
-			msgCopy.Content = "工具调用"
-		}
 	}
 
 	return &msgCopy

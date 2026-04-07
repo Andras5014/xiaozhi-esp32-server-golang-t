@@ -143,28 +143,12 @@ func (s *MqttUdpAdapter) connectAndRetry() {
 	opts.SetUsername(cfg.Username)
 	opts.SetPassword(cfg.Password)
 
-	// KeepAlive 心跳：客户端每 30s 发送 PINGREQ，broker 回复 PINGRESP。
-	// 若 PingTimeout(10s) 内无响应，paho 判定连接已死并触发 ConnectionLostHandler。
-	// 这是检测 NAT 网关静默丢弃 TCP 连接的关键机制。
-	opts.SetKeepAlive(30 * time.Second)
-	opts.SetPingTimeout(10 * time.Second)
-
-	// 启用自动重连：连接丢失后 paho 自动以指数退避重试（上限 60s），
-	// 重连成功后触发 OnConnectHandler 重新订阅 topic。
-	opts.SetAutoReconnect(true)
-	opts.SetMaxReconnectInterval(60 * time.Second)
-	opts.SetOrderMatters(false)
-
 	opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
-		Errorf("MQTT连接丢失（将自动重连）: %v, Broker=%s:%d", err, cfg.Broker, cfg.Port)
-	})
-
-	opts.SetReconnectingHandler(func(client mqtt.Client, opts *mqtt.ClientOptions) {
-		Infof("MQTT正在重连 Broker=%s:%d ...", cfg.Broker, cfg.Port)
+		Errorf("MQTT连接丢失: %v", err)
 	})
 
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		Infof("MQTT已连接, Broker=%s:%d", cfg.Broker, cfg.Port)
+		Info("MQTT已连接")
 		topic := ServerSubTopicPrefix
 		if token := client.Subscribe(topic, 0, s.handleMessage); token.Wait() && token.Error() != nil {
 			Errorf("订阅主题失败: %v", token.Error())
@@ -205,11 +189,6 @@ func (s *MqttUdpAdapter) checkClientActive() error {
 			case <-s.stopCtx.Done():
 				return
 			case <-ticker.C:
-				client := s.getClient()
-				if client != nil && !client.IsConnectionOpen() {
-					Warnf("MQTT连接健康检查: 连接不可用（可能已被 NAT 网关静默断开），等待自动重连...")
-				}
-
 				s.deviceId2Conn.Range(func(key, value interface{}) bool {
 					conn := value.(*MqttUdpConn)
 					if !conn.IsActive() {
@@ -330,21 +309,6 @@ func (s *MqttUdpAdapter) processMessage() {
 			}
 
 			deviceSession := s.getDeviceSession(deviceId)
-			// 检查已有会话是否存活：checkClientActive 可能已经 Destroy 了旧连接，
-			// 但由于竞态条件尚未从 deviceId2Conn 中删除。此时旧连接的 context 已
-			// 取消，消息推入后无人消费，导致设备得不到响应。
-			if deviceSession != nil && !deviceSession.IsAlive() {
-				log.Infof("设备 %s 旧 MQTT 会话已失效，清理并重建", deviceId)
-				s.handleDisconnect(deviceId)
-				deviceSession = nil
-			}
-			// goodbye 表示设备主动断开，无需为其创建新会话。
-			// 典型场景：服务端空闲超时清理会话后发送 goodbye，设备回复 goodbye，
-			// 此时不应该创建新的 ChatManager，否则会产生无用的僵尸会话。
-			if deviceSession == nil && clientMsg.Type == "goodbye" {
-				log.Infof("设备 %s 无会话时收到 goodbye，忽略", deviceId)
-				continue
-			}
 			if deviceSession == nil {
 				// 从UDP服务端获取会话信息
 				udpServer := s.getUdpServer()
@@ -374,15 +338,8 @@ func (s *MqttUdpAdapter) processMessage() {
 				//保存至deviceId2UdpSession
 				s.SetDeviceSession(deviceId, deviceSession)
 
-				thisConn := deviceSession
-				deviceSession.OnClose(func(dId string) {
-					currentConn := s.getDeviceSession(dId)
-					if currentConn != nil && currentConn != thisConn {
-						log.Infof("设备 %s 旧连接关闭，但已有新连接替代，跳过清理", dId)
-						return
-					}
-					s.handleDisconnect(dId)
-				})
+				deviceSession.OnClose(s.handleDisconnect)
+
 				s.onNewConnection(deviceSession)
 			}
 

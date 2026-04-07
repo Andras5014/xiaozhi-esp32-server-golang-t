@@ -37,8 +37,8 @@ type MqttUdpConn struct {
 	data sync.Map
 
 	onCloseCbList []func(deviceId string)
-	destroyOnce   sync.Once
-	lastActiveTs  int64 //上下行 信令和音频数据 都会更新
+
+	lastActiveTs int64 //上下行 信令和音频数据 都会更新
 }
 
 // NewMqttUdpConn 创建一个新的 MqttUdpConn 实例
@@ -183,25 +183,12 @@ func (c *MqttUdpConn) IsActive() bool {
 	return time.Now().Unix()-c.lastActiveTs < MaxIdleDuration
 }
 
-// IsAlive 检查连接是否仍然存活（未被 Destroy）。
-// 用于在 processMessage 中检测 checkClientActive 已销毁但因竞态仍留在 map 中的连接。
-func (c *MqttUdpConn) IsAlive() bool {
-	select {
-	case <-c.ctx.Done():
-		return false
-	default:
-		return true
-	}
-}
-
-// 销毁（sync.Once 保证只执行一次，避免重复触发 onClose 回调）
+// 销毁
 func (c *MqttUdpConn) Destroy() {
-	c.destroyOnce.Do(func() {
-		c.cancel()
-		for _, cb := range c.onCloseCbList {
-			cb(c.DeviceId)
-		}
-	})
+	c.cancel()
+	for _, cb := range c.onCloseCbList {
+		cb(c.DeviceId)
+	}
 }
 
 func (c *MqttUdpConn) CloseAudioChannel() error {

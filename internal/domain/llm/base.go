@@ -11,7 +11,6 @@ import (
 	"xiaozhi-esp32-server-golang/internal/domain/llm/coze_llm"
 	"xiaozhi-esp32-server-golang/internal/domain/llm/dify_llm"
 	"xiaozhi-esp32-server-golang/internal/domain/llm/eino_llm"
-	"xiaozhi-esp32-server-golang/internal/domain/llm/weknora_llm"
 )
 
 // LLMExtraErrorKey 错误透传约定：ResponseWithContext 失败时在 Message.Extra 中使用的 key
@@ -106,12 +105,6 @@ func GetLLMProvider(providerName string, config map[string]interface{}) (LLMProv
 		provider, err := coze_llm.NewCozeLLMProvider(cfg)
 		if err != nil {
 			return nil, fmt.Errorf("创建Coze LLM提供者失败: %v", err)
-		}
-		return provider, nil
-	case constants.LlmTypeWeknora:
-		provider, err := weknora_llm.NewWeknoraLLMProvider(config)
-		if err != nil {
-			return nil, fmt.Errorf("创建WeKnora LLM提供者失败: %v", err)
 		}
 		return provider, nil
 	}

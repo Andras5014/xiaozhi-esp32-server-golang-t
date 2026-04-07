@@ -9,7 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	types_audio "xiaozhi-esp32-server-golang/internal/data/audio"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -242,12 +241,6 @@ func (s *ChatSession) Start(pctx context.Context) error {
 	go s.llmManager.Start(s.ctx) //处理 llm后 的一系列返回消息
 	go s.ttsManager.Start(s.ctx) //处理 tts的 消息队列
 
-	// MQTT 设备 hello 超时检测：如果设备连接后长时间未发送 hello，说明会话状态异常，
-	// 主动关闭会话以释放资源并让设备重连。
-	if s.serverTransport.GetTransportType() == types_conn.TransportTypeMqttUdp {
-		go s.monitorMqttHelloTimeout(s.ctx)
-	}
-
 	return nil
 }
 
@@ -412,27 +405,22 @@ func (c *ChatSession) InitAsrLlmTts() error {
 
 func (c *ChatSession) CmdMessageLoop(ctx context.Context) {
 	recvFailCount := 0
-	var lastRecvErr error
 	for {
 		select {
 		case <-ctx.Done():
-			log.Debugf("设备 %s recvCmd context cancel", c.clientState.DeviceID)
+			log.Infof("设备 %s recvCmd context cancel", c.clientState.DeviceID)
 			return
 		default:
 		}
 
 		if recvFailCount > 3 {
-			log.Errorf("设备 %s recvCmd 连续失败超过阈值, count=%d, last_err=%v", c.clientState.DeviceID, recvFailCount, lastRecvErr)
+			log.Errorf("recv cmd timeout: %v", recvFailCount)
 			return
 		}
 
 		message, err := c.serverTransport.RecvCmd(ctx, 120)
 		if err != nil {
-			if isExpectedCancellationError(err) {
-				return
-			}
-			lastRecvErr = err
-			log.Errorf("设备 %s recvCmd error: %v", c.clientState.DeviceID, err)
+			log.Errorf("recv cmd error: %v", err)
 			recvFailCount = recvFailCount + 1
 			continue
 		}
@@ -452,16 +440,13 @@ func (c *ChatSession) AudioMessageLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Debugf("设备 %s recvAudio context cancel", c.clientState.DeviceID)
+			log.Debugf("设备 %s recvCmd context cancel", c.clientState.DeviceID)
 			return
 		default:
 		}
 		message, err := c.serverTransport.RecvAudio(ctx, 600)
 		if err != nil {
-			if isExpectedCancellationError(err) {
-				return
-			}
-			log.Errorf("设备 %s recvAudio error: %v", c.clientState.DeviceID, err)
+			log.Errorf("recv audio error: %v", err)
 			return
 		}
 		if message == nil {
@@ -627,45 +612,6 @@ func (s *ChatSession) HandleCommonHelloMessage(msg *ClientMessage) error {
 	return nil
 }
 
-const mqttHelloTimeout = 60 * time.Second
-
-// monitorMqttHelloTimeout 监控 MQTT 设备的 hello 超时。
-// 设备连接后应在短时间内发送 hello 完成握手；超时未收到说明设备状态异常（如空闲
-// 被清理后直接发了非 hello 消息触发新会话），主动关闭避免僵尸会话占用资源。
-func (s *ChatSession) monitorMqttHelloTimeout(ctx context.Context) {
-	timer := time.NewTimer(mqttHelloTimeout)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return
-	case <-timer.C:
-		if !s.helloInited {
-			log.Warnf("设备 %s MQTT 会话 %ds 内未收到 hello，关闭会话",
-				s.clientState.DeviceID, int(mqttHelloTimeout.Seconds()))
-			s.Close()
-		}
-	}
-}
-
-// autoHelloForMqtt 在 MQTT 设备跳过 hello 直接发送 listen 时，
-// 使用默认音频参数自动完成 hello 握手流程，使设备无需重连即可恢复工作。
-// 典型场景：设备空闲超时被服务端清理，但 MQTT keepalive 保持连接，唤醒后直接发 listen。
-func (s *ChatSession) autoHelloForMqtt() error {
-	syntheticMsg := &ClientMessage{
-		Type:      MessageTypeHello,
-		DeviceID:  s.clientState.DeviceID,
-		Transport: types_conn.TransportTypeMqttUdp,
-		AudioParams: &types_audio.AudioFormat{
-			Format:        types_audio.Format,
-			SampleRate:    types_audio.SampleRate,
-			Channels:      types_audio.Channels,
-			FrameDuration: types_audio.FrameDuration,
-		},
-	}
-	return s.HandleMqttHelloMessage(syntheticMsg)
-}
-
 func (s *ChatSession) resetOpenClawModeOnHello(agentIDs ...string) {
 	deviceID := strings.TrimSpace(s.clientState.DeviceID)
 	if deviceID == "" {
@@ -724,21 +670,6 @@ func (s *ChatSession) HandleWebsocketHelloMessage(msg *ClientMessage) error {
 
 // handleListenMessage 处理监听消息
 func (s *ChatSession) HandleListenMessage(msg *ClientMessage) error {
-	// MQTT 设备长时间空闲后服务端会话被 checkClientActive 清理，但设备端 MQTT 连接
-	// 仍在线（keepalive），唤醒时会跳过 hello 直接发 listen。此时新建的会话缺少
-	// hello 阶段的关键初始化（VAD/音频管道未启动），导致音频无法处理、设备得不到响应。
-	// 使用默认音频参数自动完成 hello 握手，让设备无需重连即可恢复工作。
-	if !s.helloInited && s.serverTransport.GetTransportType() == types_conn.TransportTypeMqttUdp {
-		log.Warnf("设备 %s 收到 listen（state=%s）但 hello 未初始化，自动执行 hello 握手",
-			s.clientState.DeviceID, msg.State)
-		if err := s.autoHelloForMqtt(); err != nil {
-			log.Errorf("设备 %s 自动 hello 失败: %v，关闭会话", s.clientState.DeviceID, err)
-			s.Close()
-			return nil
-		}
-		log.Infof("设备 %s 自动 hello 初始化成功，继续处理 listen 消息", s.clientState.DeviceID)
-	}
-
 	// 根据状态处理
 	switch msg.State {
 	case MessageStateStart:
@@ -868,14 +799,9 @@ func (s *ChatSession) HandleWelcome() {
 }
 
 func (a *ChatSession) checkExitWords(text string) bool {
-	normalized := removePunctuation(text)
-	exitWords := []string{
-		"再见", "拜拜", "退下吧", "退出", "退出对话",
-		"停止对话", "别说了", "不说了", "结束对话",
-		"不聊了", "拜了个拜",
-	}
+	exitWords := []string{"再见", "退下吧", "退出", "退出对话"}
 	for _, word := range exitWords {
-		if strings.Contains(normalized, word) {
+		if strings.Contains(text, word) {
 			return true
 		}
 	}
@@ -1302,8 +1228,6 @@ func (s *ChatSession) OnListenStart(startSeq uint64) error {
 
 	// 定义消息保存回调
 	onMessageSave := func(userMsg *schema.Message, messageID string, audioData []float32) {
-		// 工具回填后的二次 LLM 请求依赖会话内存历史，这里需要同步补入当前轮 user 消息。
-		s.clientState.AddMessage(userMsg)
 		// ASR 文本和音频同时获取，一次性保存（不需要两阶段）
 		eventbus.Get().Publish(eventbus.TopicAddMessage, &eventbus.AddMessageEvent{
 			ClientState: s.clientState,
@@ -1391,47 +1315,41 @@ func (s *ChatSession) ClearChatTextQueue() {
 
 // DoExitChat 执行退出聊天逻辑（发送再见语并关闭会话）
 func (s *ChatSession) DoExitChat() {
+	// 友好的再见语
 	goodbyeText := "好的，再见！期待下次与您聊天～"
 
+	// 保存一条 assistant 角色的消息
 	goodbyeMsg := schema.AssistantMessage(goodbyeText, nil)
 	if err := s.llmManager.AddLlmMessage(s.clientState.Ctx, goodbyeMsg); err != nil {
 		log.Errorf("保存再见消息失败: %v", err)
 	}
 
+	// 获取 context
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
 	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
 
+	// 发送 TTS 再见语
 	s.ttsManager.EnqueueTtsStart(ctx)
 
 	err := s.ttsManager.handleTextResponse(ctx, llm_common.LLMResponseStruct{
 		Text:    goodbyeText,
 		IsStart: true,
 		IsEnd:   true,
-	}, true)
+	}, true) // 同步处理，等待TTS完成
 
 	if err != nil {
 		log.Errorf("发送再见语失败: %v", err)
-		s.Close()
-		return
 	}
 
 	s.ttsManager.RequestTurnEnd(ctx, err)
 	s.ttsManager.EnqueueTtsStop(ctx)
-
-	// handleTextResponse(sync=true) 只保证 TTS 音频已生成并入队到 sessionAudioQueue，
-	// 但 runSenderLoop 尚未将所有帧发送到设备。必须等待足够时间让 runSenderLoop
-	// 完成音频发送和 TtsStop 处理，否则 Close() 会立即取消上下文导致
-	// runSenderLoop 退出、设备收不到完整再见语而卡在聆听状态。
-	select {
-	case <-s.ctx.Done():
-	case <-time.After(8 * time.Second):
-	}
-
+	// 关闭会话
 	s.Close()
 }
 
 func (s *ChatSession) Close() {
 	s.closeOnce.Do(func() {
+		// 清理ASR资源（资源管理在 ASRManager 内部）
 		if s.asrManager != nil {
 			s.asrManager.Cleanup()
 		}
@@ -1441,23 +1359,22 @@ func (s *ChatSession) Close() {
 		}
 		log.Debugf("ChatSession.Close() 开始清理会话资源, 设备 %s", deviceID)
 
+		// 取消会话级别的上下文
+		if s.cancel != nil {
+			s.cancel()
+		}
 		s.finishOpenClawWarmup("", false)
+
+		// 清理聊天文本队列
 		s.ClearChatTextQueue()
 		s.clearOpenClawStreams()
 
-		// 先发送 TtsStop 和 MqttGoodbye，再取消根上下文。
-		// 否则 s.cancel() 会导致 runSenderLoop 立即退出，
-		// 设备可能收不到 TtsStop/MqttGoodbye 而卡在聆听状态。
+		// 停止说话和清理音频相关资源
 		s.StopSpeaking(true)
 
+		// 关闭服务端传输
 		if s.serverTransport != nil {
 			s.serverTransport.Close()
-		}
-
-		// 在 TtsStop 和 MqttGoodbye 发送完成后再取消上下文，
-		// 让 runSenderLoop 等后台协程有序退出。
-		if s.cancel != nil {
-			s.cancel()
 		}
 
 		if s.speakerManager != nil {
@@ -1603,14 +1520,6 @@ func (s *ChatSession) actionDoChat(ctx context.Context, text string, speakerResu
 	userMessage := &schema.Message{
 		Role:    schema.User,
 		Content: text,
-	}
-	// detect 直达/注入文本等入口不会经过 ASR 的 onMessageSave，
-	// 在真正发起 LLM 前补齐当前轮 user 到会话内存，供工具回填后的二次请求复用。
-	lastMessages := s.clientState.GetMessages(1)
-	if len(lastMessages) == 0 || lastMessages[len(lastMessages)-1] == nil ||
-		lastMessages[len(lastMessages)-1].Role != schema.User ||
-		lastMessages[len(lastMessages)-1].Content != userMessage.Content {
-		s.clientState.AddMessage(userMessage)
 	}
 
 	// 获取全局MCP工具列表

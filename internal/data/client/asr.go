@@ -9,9 +9,6 @@ import (
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
-// AsrAudioChannelCap 流式 ASR 输入通道容量（帧数）。过小会在上游发送慢时频繁丢包；发送前会拷贝切片，避免与解码缓冲复用产生数据竞争。
-const AsrAudioChannelCap = 1024
-
 type Asr struct {
 	lock sync.RWMutex
 	// ASR 上下文和通道
@@ -146,13 +143,13 @@ func (a *Asr) AddAudioData(pcmFrameData []float32) error {
 	a.lock.Lock()
 	defer a.lock.Unlock()
 	if a.AsrAudioChannel != nil {
-		// 必须拷贝：上游常把解码结果写入复用缓冲（如 pcmFrame[:n]），若直接送入 channel，ASR 协程可能读到被覆盖后的错误数据。
-		frame := make([]float32, len(pcmFrameData))
-		copy(frame, pcmFrameData)
+		// 使用 select 实现非阻塞发送，避免 channel 满时死锁
 		select {
-		case a.AsrAudioChannel <- frame:
-			a.HistoryAudioBuffer = append(a.HistoryAudioBuffer, frame...)
+		case a.AsrAudioChannel <- pcmFrameData:
+			// 成功发送，同步缓存音频数据用于聊天历史记录
+			a.HistoryAudioBuffer = append(a.HistoryAudioBuffer, pcmFrameData...)
 		default:
+			// channel 已满，跳过本次数据，避免阻塞导致死锁
 			log.Warnf("AsrAudioChannel 已满，跳过本次音频数据")
 		}
 	}
