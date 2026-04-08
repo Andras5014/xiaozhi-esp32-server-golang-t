@@ -142,7 +142,7 @@ func (s *UdpServer) processPacket(addr *net.UDPAddr, data []byte) {
 			Warnf("session不存在 addr: %s", addr)
 			return
 		}
-		udpSession.RemoteAddr = addr
+		udpSession.SetRemoteAddr(addr)
 		s.addUdpSession(addr, udpSession)
 	}
 
@@ -248,7 +248,10 @@ func (s *UdpServer) CreateSession(deviceId, clientId string) *UdpSession {
 	//通过channel发送音频数据, 当channel关闭的时候停止
 	go func() {
 		for data := range session.SendChannel {
-			if session.RemoteAddr == nil {
+			remoteAddr := session.WaitRemoteAddr(2 * time.Second)
+			if remoteAddr == nil {
+				dropped := 1 + session.DrainPendingAudio()
+				Warnf("UDP远端地址未建立，TTS音频被丢弃: device=%s, connId=%s, dropped=%d", session.DeviceId, session.ConnId, dropped)
 				continue
 			}
 			encrypted, err := session.Encrypt(data)
@@ -257,7 +260,7 @@ func (s *UdpServer) CreateSession(deviceId, clientId string) *UdpSession {
 				continue
 			}
 			//Debugf("发送音频数据, nonce: %s, 大小: %d 字节", hex.EncodeToString(encrypted[:16]), len(encrypted))
-			_, err = s.conn.WriteToUDP(encrypted, session.RemoteAddr)
+			_, err = s.conn.WriteToUDP(encrypted, remoteAddr)
 			if err != nil {
 				Errorf("发送音频数据失败: %v", err)
 				continue
@@ -276,7 +279,9 @@ func (s *UdpServer) CreateSession(deviceId, clientId string) *UdpSession {
 func (s *UdpServer) CloseSession(connID string) {
 	session := s.getSessionByNonce(connID)
 	if session != nil {
-		s.addr2Session.Delete(session.RemoteAddr.String())
+		if remoteAddr := session.GetRemoteAddr(); remoteAddr != nil {
+			s.addr2Session.Delete(remoteAddr.String())
+		}
 		session.Destroy()
 	}
 	s.nonce2Session.Delete(connID)
