@@ -22,7 +22,6 @@ import (
 	log "xiaozhi-esp32-server-golang/logger"
 
 	"github.com/cloudwego/eino/schema"
-	mcp_go "github.com/mark3labs/mcp-go/mcp"
 	"github.com/spf13/viper"
 )
 
