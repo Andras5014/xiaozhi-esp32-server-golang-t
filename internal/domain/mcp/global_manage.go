@@ -516,6 +516,54 @@ func (g *GlobalMCPManager) GetToolByName(name string) (tool.InvokableTool, bool)
 	return nil, false
 }
 
+func GetServerClientByName(serverName string) *client.Client {
+	return GetGlobalMCPManager().GetServerClientByName(serverName)
+}
+
+func (g *GlobalMCPManager) GetServerClientByName(serverName string) *client.Client {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	conn, ok := g.servers[serverName]
+	if !ok || conn == nil {
+		return nil
+	}
+
+	conn.mu.RLock()
+	defer conn.mu.RUnlock()
+	return conn.client
+}
+
+func GetServerEndpointSnapshotByName(serverName string) string {
+	return GetGlobalMCPManager().GetServerEndpointSnapshotByName(serverName)
+}
+
+func (g *GlobalMCPManager) GetServerEndpointSnapshotByName(serverName string) string {
+	g.mu.RLock()
+	conn, ok := g.servers[serverName]
+	g.mu.RUnlock()
+	if !ok || conn == nil {
+		return ""
+	}
+
+	conn.mu.RLock()
+	config := conn.config
+	conn.mu.RUnlock()
+
+	_, endpoint, err := endpointForConfig(config)
+	if err != nil {
+		if strings.TrimSpace(config.Url) != "" {
+			return strings.TrimSpace(config.Url)
+		}
+		return strings.TrimSpace(config.SSEUrl)
+	}
+	return endpoint
+}
+
+func ReconnectServerByName(serverName string) (*client.Client, error) {
+	return GetGlobalMCPManager().reconnectServer(serverName)
+}
+
 // isSessionClosedError 判断是否为session closed错误
 func isSessionClosedError(err error) bool {
 	if err == nil {

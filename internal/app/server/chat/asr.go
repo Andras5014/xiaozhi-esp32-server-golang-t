@@ -598,10 +598,17 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 
 				//如果是realtime模式下，需要停止 当前的llm和tts
 				if state.IsRealTime() && viper.GetInt("chat.realtime_mode") == 2 {
-					log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
-					state.AfterAsrSessionCtx.CancelWithReason("ASRManager.StartAsrRecognitionLoop: realtime_mode=2 ASR result interrupt")
-					if a.session != nil {
-						a.session.InterruptAndClearTTSQueue()
+					shouldInterrupt := true
+					if a.session != nil && a.session.isRealtimeMcpAudioGateActive() {
+						shouldInterrupt = false
+						log.Debugf("设备 %s realtime媒体播放门控激活，延后到ASR final门控判定，跳过ASR结果打断", state.DeviceID)
+					}
+					if shouldInterrupt {
+						log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
+						state.AfterAsrSessionCtx.CancelWithReason("ASRManager.StartAsrRecognitionLoop: realtime_mode=2 ASR result interrupt")
+						if a.session != nil {
+							a.session.InterruptAndClearTTSQueue()
+						}
 					}
 				}
 

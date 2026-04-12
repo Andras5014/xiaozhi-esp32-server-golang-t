@@ -18,6 +18,7 @@ type Queue[T any] struct {
 	ch     chan T
 	cap    int
 	closed bool
+	gen    uint64
 }
 
 // NewQueue creates a new Queue with the given capacity.
@@ -28,27 +29,57 @@ func NewQueue[T any](capacity int) *Queue[T] {
 	}
 }
 
-// Push adds an item to the queue. Returns error if queue is closed.
-func (q *Queue[T]) Push(val T) error {
-	q.mu.Lock()
-	if q.closed {
-		q.mu.Unlock()
-		return ErrQueueClosed
-	}
-	ch := q.ch
-	q.mu.Unlock()
+func safeQueueSendWithTimeout[T any](ch chan T, val T, timeout time.Duration) (sent bool, closed bool) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	defer func() {
+		if recover() != nil {
+			sent = false
+			closed = true
+		}
+	}()
 
 	select {
 	case ch <- val:
-		return nil
-	default:
-		// If full, block until space is available or closed
-		select {
-		case ch <- val:
+		return true, false
+	case <-timer.C:
+		return false, false
+	}
+}
+
+// Push adds an item to the queue. Returns error if queue is closed.
+func (q *Queue[T]) Push(val T) error {
+	for {
+		q.mu.Lock()
+		if q.closed {
+			q.mu.Unlock()
+			return ErrQueueClosed
+		}
+		ch := q.ch
+		gen := q.gen
+		q.mu.Unlock()
+
+		sent, closed := safeQueueSendWithTimeout(ch, val, 10*time.Second)
+		if sent {
 			return nil
-		case <-time.After(time.Second * 10): // avoid deadlock
+		}
+		if !closed {
 			return errors.New("push timeout (10s)")
 		}
+
+		q.mu.Lock()
+		queueClosed := q.closed
+		shouldRetry := !queueClosed && q.gen != gen
+		q.mu.Unlock()
+
+		if queueClosed {
+			return ErrQueueClosed
+		}
+		if shouldRetry {
+			continue
+		}
+		return ErrQueueClosed
 	}
 }
 
@@ -105,17 +136,30 @@ func (q *Queue[T]) Pop(ctx context.Context, timeout time.Duration) (T, error) {
 	}
 }
 
-// Clear empties the queue and ensures all Pop calls return immediately.
-func (q *Queue[T]) Clear() {
+// ClearAndDrain empties the queue, returns the items drained from the swapped-out queue,
+// and ensures all Pop calls on the old queue return immediately.
+func (q *Queue[T]) ClearAndDrain() []T {
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
-		return
+		return nil
 	}
 	oldCh := q.ch
 	q.ch = make(chan T, q.cap)
+	q.gen++
 	close(oldCh)
 	q.mu.Unlock()
+
+	drained := make([]T, 0, len(oldCh))
+	for item := range oldCh {
+		drained = append(drained, item)
+	}
+	return drained
+}
+
+// Clear empties the queue and ensures all Pop calls return immediately.
+func (q *Queue[T]) Clear() {
+	_ = q.ClearAndDrain()
 }
 
 // Close closes the queue permanently. All Push/Pop will error after this.
@@ -123,6 +167,7 @@ func (q *Queue[T]) Close() {
 	q.mu.Lock()
 	if !q.closed {
 		q.closed = true
+		q.gen++
 		close(q.ch)
 	}
 	q.mu.Unlock()

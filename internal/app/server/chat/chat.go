@@ -267,6 +267,9 @@ func (c *ChatManager) Close() error {
 
 func (c *ChatManager) OnClose(deviceId string) {
 	log.Infof("设备 %s 断开连接", deviceId)
+	if c.session != nil && c.session.mediaPlayer != nil {
+		c.session.mediaPlayer.DetachSession(true)
+	}
 	c.cancel()
 	if c.clientState != nil {
 		eventbus.Get().Publish(eventbus.TopicSessionEnd, c.clientState)

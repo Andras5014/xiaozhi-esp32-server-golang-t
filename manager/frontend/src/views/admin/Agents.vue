@@ -126,6 +126,16 @@
             <el-option label="长记忆" value="long" />
           </el-select>
         </el-form-item>
+        <el-form-item label="MCP服务">
+          <el-input
+            v-model="agentForm.mcp_service_names"
+            clearable
+            placeholder="多个服务用英文逗号分隔，留空表示使用全部已启用服务"
+          />
+          <div style="margin-top: 6px; color: #909399; font-size: 12px;">
+            例如：发现报告,高德地图。留空会清空智能体的服务筛选条件。
+          </div>
+        </el-form-item>
         <el-form-item label="OpenClaw">
           <el-button type="primary" size="large" style="width: 100%" @click="showOpenClawSettings">
             查看openclaw
@@ -442,6 +452,7 @@ const agentForm = ref({
   tts_config_id: null,
   asr_speed: 'normal',
   memory_mode: 'short',
+  mcp_service_names: '',
   openclaw_allowed: false,
   openclaw_enter_keywords: [...OPENCLAW_DEFAULT_ENTER_KEYWORDS],
   openclaw_exit_keywords: [...OPENCLAW_DEFAULT_EXIT_KEYWORDS],
@@ -506,6 +517,7 @@ const editAgent = (agent) => {
     tts_config_id: agent.tts_config_id,
     asr_speed: agent.asr_speed || 'normal',
     memory_mode: agent.memory_mode || 'short',
+    mcp_service_names: agent.mcp_service_names || '',
     openclaw_allowed: !!openclawConfig.allowed,
     openclaw_enter_keywords: normalizeKeywordList(openclawConfig.enter_keywords),
     openclaw_exit_keywords: normalizeKeywordList(openclawConfig.exit_keywords),
@@ -599,6 +611,7 @@ const resetForm = () => {
     tts_config_id: null,
     asr_speed: 'normal',
     memory_mode: 'short',
+    mcp_service_names: '',
     openclaw_allowed: false,
     openclaw_enter_keywords: [...OPENCLAW_DEFAULT_ENTER_KEYWORDS],
     openclaw_exit_keywords: [...OPENCLAW_DEFAULT_EXIT_KEYWORDS],

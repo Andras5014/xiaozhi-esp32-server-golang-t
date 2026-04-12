@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -47,6 +48,7 @@ type ChatSession struct {
 	ttsManager      *TTSManager
 	llmManager      *LLMManager
 	speakerManager  *SpeakerManager
+	mediaPlayer     *SessionMediaPlayer
 	serverTransport *ServerTransport
 
 	ctx    context.Context
@@ -104,6 +106,7 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 	s.asrManager = NewASRManager(clientState, serverTransport)
 	s.asrManager.session = s // 设置 session 引用
 	s.ttsManager = NewTTSManager(clientState, serverTransport, s)
+	s.mediaPlayer = NewSessionMediaPlayer(s)
 	s.llmManager = NewLLMManager(clientState, serverTransport, s.ttsManager, s, transformRegistry)
 
 	// 如果启用声纹识别，创建声纹管理器
@@ -210,6 +213,10 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 		clientState.MarkAsrFirstText()
 		s.TraceAsrFirstText(clientState.Ctx, time.Now().UnixMilli())
 		if clientState.IsRealTime() && viper.GetInt("chat.realtime_mode") == 4 {
+			if s.isRealtimeMcpAudioGateActive() {
+				log.Debugf("设备 %s realtime媒体播放门控激活，跳过ASR首字打断: text=%s", clientState.DeviceID, text)
+				return
+			}
 			clientState.AfterAsrSessionCtx.CancelWithReason("ChatSession.OnAsrFirstTextCallback: realtime_mode=4")
 			s.InterruptAndClearTTSQueue()
 		}
@@ -240,6 +247,9 @@ func (s *ChatSession) Start(pctx context.Context) error {
 	go s.processChatText(s.ctx)  //处理 asr后 的对话消息
 	go s.llmManager.Start(s.ctx) //处理 llm后 的一系列返回消息
 	go s.ttsManager.Start(s.ctx) //处理 tts的 消息队列
+	if s.mediaPlayer != nil {
+		s.mediaPlayer.AttachSession()
+	}
 
 	return nil
 }
@@ -994,6 +1004,11 @@ func (s *ChatSession) InjectOpenClawResponse(event openclaw.ResponseDelivery) er
 
 // InterruptAndClearTTSQueue 触发 TTS 打断并清空发送队列（供 realtime 模式 VAD 打断等场景调用）
 func (s *ChatSession) InterruptAndClearTTSQueue() {
+	if s.mediaPlayer != nil {
+		if err := s.mediaPlayer.Suspend(); err != nil && !errors.Is(err, context.Canceled) {
+			log.Warnf("挂起媒体播放失败: %v", err)
+		}
+	}
 	s.ttsManager.InterruptAndStop(s.clientState.Ctx, true, context.Canceled)
 }
 
@@ -1359,6 +1374,10 @@ func (s *ChatSession) Close() {
 		}
 		log.Debugf("ChatSession.Close() 开始清理会话资源, 设备 %s", deviceID)
 
+		if s.mediaPlayer != nil {
+			s.mediaPlayer.DetachSession(true)
+		}
+
 		// 取消会话级别的上下文
 		if s.cancel != nil {
 			s.cancel()
@@ -1369,8 +1388,9 @@ func (s *ChatSession) Close() {
 		s.ClearChatTextQueue()
 		s.clearOpenClawStreams()
 
-		// 停止说话和清理音频相关资源
-		s.StopSpeaking(true)
+		// 停止说话和清理音频相关资源。Close 路径前面已经 DetachSession(true)，
+		// 这里不要再次 Suspend 媒体，否则会把 resumeOnAttach 清掉。
+		s.stopSpeakingWithLock(true, true, false)
 
 		// 关闭服务端传输
 		if s.serverTransport != nil {
@@ -1405,6 +1425,11 @@ func (s *ChatSession) actionDoChat(ctx context.Context, text string, speakerResu
 	deviceID := strings.TrimSpace(s.clientState.DeviceID)
 	openclawSessionID := strings.TrimSpace(s.clientState.SessionID)
 	trimmedText := strings.TrimSpace(text)
+
+	handledByRealtimeGate, gateErr := s.tryHandleRealtimeMcpAudioASR(ctx, trimmedText)
+	if handledByRealtimeGate {
+		return gateErr
+	}
 
 	openclawManager := openclaw.GetManager()
 	if s.clientState.DeviceConfig.OpenClaw.Allowed {

@@ -27,6 +27,9 @@ type ChatSessionOperator interface {
 	// LocalMcpSearchKnowledge 检索当前智能体关联知识库
 	LocalMcpSearchKnowledge(ctx context.Context, query string, topK int, knowledgeBaseIDs []uint) ([]config_types.KnowledgeSearchHit, error)
 
+	// LocalMcpControlMusicPlayback 控制当前会话级媒体播放
+	LocalMcpControlMusicPlayback(ctx context.Context, params *MusicPlaybackControlParams) (*MusicPlaybackControlResult, error)
+
 	// 未来可以根据需要添加其他操作
 	// GetDeviceID() string
 	// IsActive() bool

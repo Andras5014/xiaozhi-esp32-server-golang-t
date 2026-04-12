@@ -410,11 +410,11 @@ if invokeToolSuccess && !shouldStopLLMProcessing {
 3. 在 `ParseMCPResponse` 中添加解析逻辑
 4. 提供便利构造函数
 
-## 🎵 MCP Audio Server 示例
+## 🎵 MCP Audio Server 独立仓库
 
 ### 概述
 
-`examples/mcp_audio` 目录下提供了一个完整的 MCP Audio Server 实现示例，展示了如何创建支持音频资源处理的 MCP 服务器。
+MCP Audio Server 已经拆分为独立仓库，推荐通过独立项目运行和调试音频类 MCP Server。当前文档中的这一节主要说明它与主服务的协议兼容方式。
 
 ### 核心功能
 
@@ -423,12 +423,7 @@ if invokeToolSuccess && !shouldStopLLMProcessing {
 - **功能**: 搜索并播放音乐
 - **返回**: `ResourceLink` 类型的音频资源链接
 
-#### 2. 音量控制工具
-- **工具名称**: `set_volume`
-- **功能**: 调整系统音量
-- **参数**: volume (1-100)
-
-#### 3. 音频资源模板
+#### 2. 音频资源模板
 - **URI 格式**: `resource://read_from_http`
 - **功能**: 支持分页读取音频数据，通过 Arguments 传递参数
 - **参数**: url (实际音乐URL), start (起始位置), end (结束位置)
@@ -445,11 +440,15 @@ if invokeToolSuccess && !shouldStopLLMProcessing {
 - **多传输支持**: stdio 和 HTTP 两种传输方式
 - **实时播放**: 使用 Pipe 机制实现边读取边播放
 
-### 使用示例
+### 使用方式
 
 ```bash
+# 获取并进入独立仓库
+git clone https://github.com/hackers365/mcp_audio_server.git
+cd mcp_audio_server
+
 # 启动服务器
-go run examples/mcp_audio/mcp_server_audio.go
+go run .
 
 # 工具调用
 {
@@ -458,7 +457,7 @@ go run examples/mcp_audio/mcp_server_audio.go
 }
 ```
 
-这个示例展示了如何构建支持音频资源处理的 MCP 工具，可作为开发其他音频相关工具的参考模板。
+这个独立项目展示了如何构建支持音频资源处理的 MCP 工具，可作为开发其他音频相关工具的参考模板。更完整的使用说明可参考 `doc/mcp_audio_example.md`。
 
 ---
 
