@@ -251,13 +251,14 @@ func (s *MqttUdpAdapter) Stop() {
 		Debugf("MqttUdpAdapter Stop, disconnect mqtt client")
 		client.Disconnect(250)
 	}
+	// 先清理设备侧连接（CloseSession / Destroy 会话），再关 UdpServer，避免 Stop 里先 Close 将 s.conn 置 nil 时发送协程仍写 s.conn
+	s.clearDeviceSessions()
 	udpServer := s.getUdpServer()
 	Debugf("MqttUdpAdapter Stop, udpServer: %v", udpServer)
 	if udpServer != nil {
 		Debugf("MqttUdpAdapter Stop, close udpServer")
 		_ = udpServer.Close()
 	}
-	s.clearDeviceSessions()
 }
 
 // ReloadMqttClient 仅重连 MQTT（保持 UDP 服务器实例）

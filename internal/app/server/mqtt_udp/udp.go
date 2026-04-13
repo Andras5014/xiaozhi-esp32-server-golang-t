@@ -116,14 +116,18 @@ func (s *UdpSession) SendAudioData(data []byte) (bool, error) {
 	select {
 	case s.SendChannel <- data:
 		return true, nil
-	default:
-		return false, fmt.Errorf("send channel is full")
+		//如果SendChannel堵塞 延迟50ms才丢帧
+	case <-time.After(50 * time.Millisecond):
+		return false, fmt.Errorf("send channel full, frame dropped")
 	}
 }
 
 func (s *UdpSession) Destroy() {
 	s.Lock.Lock()
 	defer s.Lock.Unlock()
+	if s.Status == UdpSessionStatusClosed {
+		return
+	}
 	s.Status = UdpSessionStatusClosed
 	close(s.RecvChannel)
 	close(s.SendChannel)
