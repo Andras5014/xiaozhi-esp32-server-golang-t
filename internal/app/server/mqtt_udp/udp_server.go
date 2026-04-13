@@ -69,26 +69,8 @@ func (s *UdpServer) Start() error {
 	return nil
 }
 
-// closeAllSessions 关闭所有 UDP 会话的 channel，使 CreateSession 中的发送 goroutine 退出，
-// 避免 Close 将 s.conn 置 nil 后仍执行 s.conn.WriteToUDP 导致 nil 解引用 panic。
-func (s *UdpServer) closeAllSessions() {
-	s.nonce2Session.Range(func(key, value interface{}) bool {
-		if session, ok := value.(*UdpSession); ok {
-			session.Destroy()
-		}
-		s.nonce2Session.Delete(key)
-		return true
-	})
-	s.addr2Session.Range(func(key, _ interface{}) bool {
-		s.addr2Session.Delete(key)
-		return true
-	})
-}
-
-// Close 先销毁全部会话再关闭监听 conn，使 handlePackets 与 per-session 发送协程安全退出
+// Close 关闭 UDP 服务器，使 handlePackets 退出
 func (s *UdpServer) Close() error {
-	s.closeAllSessions()
-
 	s.Lock()
 	conn := s.conn
 	s.conn = nil
@@ -160,7 +142,7 @@ func (s *UdpServer) processPacket(addr *net.UDPAddr, data []byte) {
 			Warnf("session不存在 addr: %s", addr)
 			return
 		}
-		udpSession.RemoteAddr = addr
+		udpSession.SetRemoteAddr(addr)
 		s.addUdpSession(addr, udpSession)
 	}
 
@@ -266,7 +248,10 @@ func (s *UdpServer) CreateSession(deviceId, clientId string) *UdpSession {
 	//通过channel发送音频数据, 当channel关闭的时候停止
 	go func() {
 		for data := range session.SendChannel {
-			if session.RemoteAddr == nil {
+			remoteAddr := session.WaitRemoteAddr(2 * time.Second)
+			if remoteAddr == nil {
+				dropped := 1 + session.DrainPendingAudio()
+				Warnf("UDP远端地址未建立，TTS音频被丢弃: device=%s, connId=%s, dropped=%d", session.DeviceId, session.ConnId, dropped)
 				continue
 			}
 			encrypted, err := session.Encrypt(data)
@@ -274,14 +259,8 @@ func (s *UdpServer) CreateSession(deviceId, clientId string) *UdpSession {
 				Errorf("加密失败: %v", err)
 				continue
 			}
-			s.RLock()
-			conn := s.conn
-			s.RUnlock()
-			if conn == nil {
-				continue
-			}
 			//Debugf("发送音频数据, nonce: %s, 大小: %d 字节", hex.EncodeToString(encrypted[:16]), len(encrypted))
-			_, err = conn.WriteToUDP(encrypted, session.RemoteAddr)
+			_, err = s.conn.WriteToUDP(encrypted, remoteAddr)
 			if err != nil {
 				Errorf("发送音频数据失败: %v", err)
 				continue
@@ -300,7 +279,9 @@ func (s *UdpServer) CreateSession(deviceId, clientId string) *UdpSession {
 func (s *UdpServer) CloseSession(connID string) {
 	session := s.getSessionByNonce(connID)
 	if session != nil {
-		s.addr2Session.Delete(session.RemoteAddr.String())
+		if remoteAddr := session.GetRemoteAddr(); remoteAddr != nil {
+			s.addr2Session.Delete(remoteAddr.String())
+		}
 		session.Destroy()
 	}
 	s.nonce2Session.Delete(connID)

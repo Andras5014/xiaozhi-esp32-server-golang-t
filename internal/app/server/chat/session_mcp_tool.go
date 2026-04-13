@@ -86,6 +86,22 @@ type PlayMusicParams struct {
 	//Welcome string `json:"welcome" description:"搜索音乐会耗时过长，用于安抚用户的提示语" required:"true"`
 }
 
+type MusicPlaybackControlParams struct {
+	Action string `json:"action" description:"控制动作：resume(继续播放/恢复播放/继续听/接着放)、pause、stop、prev、next、play_playlist(播放歌单/播放歌单里的歌曲/播放播放列表)、enqueue_current；play 和 continue 也会归一化为 resume" required:"true"`
+}
+
+type MusicPlaybackControlResult struct {
+	Action          string `json:"action"`
+	Status          string `json:"status"`
+	CurrentTitle    string `json:"current_title,omitempty"`
+	CurrentIndex    int    `json:"current_index"`
+	PlaylistLength  int    `json:"playlist_length"`
+	CurrentSource   string `json:"current_source,omitempty"`
+	PositionMs      int64  `json:"position_ms"`
+	AddedTitle      string `json:"added_title,omitempty"`
+	SilenceResponse bool   `json:"silence_response"`
+}
+
 // 播放音乐
 func (c *ChatManager) LocalMcpPlayMusic(ctx context.Context, musicParams *PlayMusicParams) error {
 	musicName := musicParams.Name
@@ -175,6 +191,98 @@ func (c *ChatManager) LocalMcpSearchKnowledge(ctx context.Context, query string,
 		return nil, fmt.Errorf("会话状态不可用")
 	}
 	return rag.Search(ctx, query, topK, c.clientState.DeviceConfig.KnowledgeBases, knowledgeBaseIDs)
+}
+
+func (c *ChatManager) LocalMcpControlMusicPlayback(ctx context.Context, params *MusicPlaybackControlParams) (*MusicPlaybackControlResult, error) {
+	if c == nil {
+		return nil, fmt.Errorf("chat manager 不可用")
+	}
+	return controlMusicPlayback(ctx, c.session, params)
+}
+
+func controlMusicPlayback(ctx context.Context, session *ChatSession, params *MusicPlaybackControlParams) (*MusicPlaybackControlResult, error) {
+	if session == nil || session.mediaPlayer == nil {
+		return nil, fmt.Errorf("媒体播放器不可用")
+	}
+	if params == nil {
+		return nil, fmt.Errorf("控制参数不能为空")
+	}
+
+	action := normalizeMusicPlaybackAction(params.Action)
+	if action == "" {
+		return nil, fmt.Errorf("不支持的控制动作: %s", params.Action)
+	}
+
+	result := &MusicPlaybackControlResult{
+		Action:          action,
+		SilenceResponse: true,
+	}
+
+	switch action {
+	case "resume":
+		if err := session.mediaPlayer.Play(ctx); err != nil {
+			return nil, err
+		}
+	case "pause":
+		if err := session.mediaPlayer.Pause(); err != nil {
+			return nil, err
+		}
+	case "stop":
+		if err := session.mediaPlayer.Stop(ctx); err != nil {
+			return nil, err
+		}
+	case "prev":
+		if err := session.mediaPlayer.Prev(ctx); err != nil {
+			return nil, err
+		}
+	case "next":
+		if err := session.mediaPlayer.Next(ctx); err != nil {
+			return nil, err
+		}
+	case "play_playlist":
+		if err := session.mediaPlayer.PlayAgentPlaylist(ctx); err != nil {
+			return nil, err
+		}
+	case "enqueue_current":
+		appendResult, err := session.mediaPlayer.AppendCurrentToPlaylist()
+		if err != nil {
+			return nil, err
+		}
+		result.AddedTitle = appendResult.AddedTitle
+		if _, err := session.mediaPlayer.ResumeIfInterruptedPause(); err != nil {
+			log.Warnf("enqueue_current 自动恢复播放失败: %v", err)
+		}
+	}
+
+	state := session.mediaPlayer.GetState()
+	result.Status = state.Status.String()
+	result.CurrentTitle = state.CurrentTitle
+	result.CurrentIndex = state.CurrentIndex
+	result.PlaylistLength = len(state.Playlist)
+	result.CurrentSource = string(state.CurrentSourceType)
+	result.PositionMs = state.PositionMs
+	return result, nil
+}
+
+func normalizeMusicPlaybackAction(action string) string {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "play", "resume", "continue":
+		return "resume"
+	case "pause":
+		return "pause"
+	case "stop":
+		return "stop"
+	case "prev", "previous":
+		return "prev"
+	case "next":
+		return "next"
+	case "play_playlist", "play_agent_playlist", "play_playlist_songs", "playlist":
+		return "play_playlist"
+	case "enqueue_current", "append_current", "add_current_to_playlist":
+		return "enqueue_current"
+	default:
+		return ""
+	}
 }
 
 // searchMusicFromAPI 从API搜索音乐

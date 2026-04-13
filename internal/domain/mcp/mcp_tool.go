@@ -118,3 +118,7 @@ func (t *McpTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts
 func (t *McpTool) GetClient() *client.Client {
 	return t.client
 }
+
+func (t *McpTool) GetServerName() string {
+	return t.serverName
+}

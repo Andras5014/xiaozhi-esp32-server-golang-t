@@ -85,19 +85,17 @@ func StopMqttServer() error {
 	log.Infof("enter StopMqttServer ")
 	defer log.Infof("exit StopMqttServer ")
 	serverMu.Lock()
+	defer serverMu.Unlock()
 	srv := currentServer
-	serverMu.Unlock()
 	if srv == nil {
 		return nil
 	}
-	// 先 Close 释放端口，成功后再清 currentServer，避免热更时新实例在端口未释放时启动
+	// 将 Close 纳入同一临界区，避免并发 Stop 对同一实例重复调用 Close。
 	if err := srv.Close(); err != nil {
 		log.Warnf("StopMqttServer Close: %v", err)
 		return err
 	}
-	serverMu.Lock()
 	currentServer = nil
-	serverMu.Unlock()
 	log.Info("MQTT 服务器已停止")
 	return nil
 }

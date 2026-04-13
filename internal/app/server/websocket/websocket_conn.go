@@ -28,11 +28,6 @@ type WebSocketConn struct {
 
 	closed bool
 	sync.RWMutex
-
-	// wg：Close 时先 cancel+关 conn，再 Wait，避免读协程在 ReadMessage 成功后仍向 channel 发送时 close channel（send on closed channel panic）
-	wg sync.WaitGroup
-	// closeOnce：保证接收 channel 只关闭一次
-	closeOnce sync.Once
 }
 
 // NewWebSocketConn 创建一个新的 WebSocketConn 实例
@@ -55,9 +50,7 @@ func NewWebSocketConn(conn *websocket.Conn, deviceID string, isMqttUdpBridge boo
 	})
 
 	// 启动心跳检测goroutine
-	instance.wg.Add(1)
 	go func() {
-		defer instance.wg.Done()
 		ticker := time.NewTicker(30 * time.Second) // 每30秒发送一次ping
 		defer ticker.Stop()
 
@@ -79,9 +72,7 @@ func NewWebSocketConn(conn *websocket.Conn, deviceID string, isMqttUdpBridge boo
 		}
 	}()
 
-	instance.wg.Add(1)
 	go func() {
-		defer instance.wg.Done()
 		for {
 			select {
 			case <-instance.ctx.Done():
@@ -98,8 +89,6 @@ func NewWebSocketConn(conn *websocket.Conn, deviceID string, isMqttUdpBridge boo
 
 				if msgType == websocket.TextMessage {
 					select {
-					case <-instance.ctx.Done():
-						return
 					case instance.recvCmdChan <- audio:
 					default:
 						log.Errorf("recv cmd channel is full")
@@ -109,8 +98,6 @@ func NewWebSocketConn(conn *websocket.Conn, deviceID string, isMqttUdpBridge boo
 						audio = instance.tryUnpackUdpBridgeAudioPacket(audio)
 					}
 					select {
-					case <-instance.ctx.Done():
-						return
 					case instance.recvAudioChan <- audio:
 					default:
 						log.Errorf("recv audio channel is full")
@@ -162,9 +149,6 @@ func (w *WebSocketConn) SendCmd(msg []byte) error {
 	if w.closed {
 		return errors.New("connection is closed")
 	}
-	if w.conn == nil {
-		return errors.New("connection is closed")
-	}
 
 	log.Debugf("send cmd: %s", string(msg))
 
@@ -181,9 +165,6 @@ func (w *WebSocketConn) SendAudio(audio []byte) error {
 	defer w.Unlock()
 
 	if w.closed {
-		return errors.New("connection is closed")
-	}
-	if w.conn == nil {
 		return errors.New("connection is closed")
 	}
 
@@ -234,24 +215,17 @@ func (w *WebSocketConn) RecvAudio(ctx context.Context, timeout int) ([]byte, err
 
 func (w *WebSocketConn) Close() error {
 	w.Lock()
+	defer w.Unlock()
+
 	if w.closed {
-		w.Unlock()
-		return nil
+		return nil // Already closed
 	}
+
 	w.closed = true
 	w.cancel()
-	if w.conn != nil {
-		_ = w.conn.Close()
-		w.conn = nil
-	}
-	w.Unlock()
-
-	w.wg.Wait()
-
-	w.closeOnce.Do(func() {
-		close(w.recvCmdChan)
-		close(w.recvAudioChan)
-	})
+	w.conn.Close()
+	close(w.recvCmdChan)
+	close(w.recvAudioChan)
 	return nil
 }
 

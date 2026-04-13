@@ -36,6 +36,57 @@ type UdpSession struct {
 	Lock        sync.Mutex
 }
 
+func (s *UdpSession) SetRemoteAddr(addr *net.UDPAddr) {
+	s.Lock.Lock()
+	defer s.Lock.Unlock()
+	s.RemoteAddr = addr
+}
+
+func (s *UdpSession) GetRemoteAddr() *net.UDPAddr {
+	s.Lock.Lock()
+	defer s.Lock.Unlock()
+	if s.RemoteAddr == nil {
+		return nil
+	}
+	addrCopy := *s.RemoteAddr
+	return &addrCopy
+}
+
+func (s *UdpSession) IsClosed() bool {
+	s.Lock.Lock()
+	defer s.Lock.Unlock()
+	return s.Status == UdpSessionStatusClosed
+}
+
+func (s *UdpSession) WaitRemoteAddr(timeout time.Duration) *net.UDPAddr {
+	if timeout <= 0 {
+		return s.GetRemoteAddr()
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		if addr := s.GetRemoteAddr(); addr != nil {
+			return addr
+		}
+		if s.IsClosed() || !time.Now().Before(deadline) {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (s *UdpSession) DrainPendingAudio() int {
+	drained := 0
+	for {
+		select {
+		case <-s.SendChannel:
+			drained++
+		default:
+			return drained
+		}
+	}
+}
+
 // decrypt 解密数据
 func (s *UdpSession) Decrypt(data []byte) ([]byte, error) {
 	// 分离nonce和密文
@@ -116,18 +167,14 @@ func (s *UdpSession) SendAudioData(data []byte) (bool, error) {
 	select {
 	case s.SendChannel <- data:
 		return true, nil
-		//如果SendChannel堵塞 延迟50ms才丢帧
-	case <-time.After(50 * time.Millisecond):
-		return false, fmt.Errorf("send channel full, frame dropped")
+	default:
+		return false, fmt.Errorf("send channel is full")
 	}
 }
 
 func (s *UdpSession) Destroy() {
 	s.Lock.Lock()
 	defer s.Lock.Unlock()
-	if s.Status == UdpSessionStatusClosed {
-		return
-	}
 	s.Status = UdpSessionStatusClosed
 	close(s.RecvChannel)
 	close(s.SendChannel)
