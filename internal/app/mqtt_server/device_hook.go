@@ -64,7 +64,31 @@ func (h *DeviceHook) OnConnect(cl *mqttServer.Client, pk packets.Packet) error {
 	if isAdmin {
 		return nil
 	}
-	pk.Connect.Clean = true
+
+	// 方案2：检查是否有旧连接正在使用相同的 ClientID，如果有则清理旧订阅
+	mac := parseMacFromClientId(cl.ID)
+	if mac != "" {
+		topic := deviceSubTopic(mac)
+		clients := h.server.Clients.GetAll()
+		for oldClientID := range clients {
+			if oldClientID != cl.ID {
+				separator := "@@@"
+				idx := strings.Index(cl.ID, separator)
+				if idx > 0 {
+					prefix := cl.ID[:idx+len(separator)]
+					if strings.HasPrefix(oldClientID, prefix) {
+						oldMac := parseMacFromClientId(oldClientID)
+						if oldMac == mac {
+							h.server.Topics.Unsubscribe(topic, oldClientID)
+							log.Infof("清理旧连接 %s 的订阅，topic: %s", oldClientID, topic)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 不强制设置 Clean=true，让客户端决定是否使用持久会话
 	return nil
 }
 
@@ -104,6 +128,9 @@ func (h *DeviceHook) OnSessionEstablished(cl *mqttServer.Client, pk packets.Pack
 
 	topic := deviceSubTopic(mac)
 
+	// 方案3：先取消旧订阅，再重新订阅，确保订阅关系正确
+	h.server.Topics.Unsubscribe(topic, cl.ID)
+
 	// 使用服务器的API直接订阅，而不是注入数据包
 	clientID := cl.ID
 	exists := h.server.Topics.Subscribe(clientID, packets.Subscription{
@@ -111,7 +138,7 @@ func (h *DeviceHook) OnSessionEstablished(cl *mqttServer.Client, pk packets.Pack
 		Qos:    0,
 	})
 
-	log.Infof("订阅客户端 %s 到主题 %s, exists: %v", clientID, topic, exists)
+	log.Infof("订阅客户端 %s 到主题 %s (重新订阅), exists: %v", clientID, topic, exists)
 }
 
 // OnSubscribe 打印订阅包
@@ -208,7 +235,7 @@ func (h *DeviceHook) PrintAllClientSubscriptions() {
 		return
 	}
 
-	for clientID, _ := range clients {
+	for clientID := range clients {
 		log.Infof("客户端 %s 订阅的主题: ", clientID)
 
 		// 使用server.Topics.Subscribers("+")获取所有主题的订阅者
