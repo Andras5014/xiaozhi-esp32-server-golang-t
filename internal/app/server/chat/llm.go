@@ -40,6 +40,7 @@ const (
 	fullTextKey          contextKey    = iota
 	toolRoundMessagesKey
 	ttsTurnTrackerKey
+	logTextLimit = 100
 )
 
 const (
@@ -79,6 +80,37 @@ func llmHandleResultFromArgs(args []any) llmHandleResult {
 		return llmHandleResult{}
 	}
 	return result
+}
+
+func truncateTextForLog(text string) string {
+	text = strings.ReplaceAll(text, "\n", "\\n")
+	runes := []rune(text)
+	if len(runes) <= logTextLimit {
+		return text
+	}
+	return string(runes[:logTextLimit]) + "...(truncated)"
+}
+
+func formatLLMRequestMessagesForLog(messages []*schema.Message) string {
+	if len(messages) == 0 {
+		return "[]"
+	}
+
+	var builder strings.Builder
+	builder.WriteString("[")
+	for i, msg := range messages {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		if msg == nil {
+			builder.WriteString("{nil}")
+			continue
+		}
+		builder.WriteString(fmt.Sprintf("{role=%s, content=\"%s\", tool_calls=%d}", msg.Role, truncateTextForLog(msg.Content), len(msg.ToolCalls)))
+	}
+	builder.WriteString("]")
+
+	return builder.String()
 }
 
 type llmResponseChannelOptions struct {
@@ -246,7 +278,7 @@ func (l *LLMManager) handleLLMWithContextAndTools(
 	// 启动 goroutine 处理响应
 	go func() {
 		defer func() {
-			log.Debugf("full Response with %d tools, fullText: %s", len(tools), rawFullText.String())
+			log.Infof("LLM最终响应汇总, tools=%d, fullText=%s", len(tools), truncateTextForLog(rawFullText.String()))
 			close(responseChannel)
 			if closeErr := pipeline.Close(); closeErr != nil {
 				log.Warnf("关闭 LLM 输出流变换管线失败: %v", closeErr)
@@ -388,6 +420,7 @@ func (l *LLMManager) handleLLMWithContextAndTools(
 					}
 					return
 				}
+				log.Infof("收到LLM响应片段, content=%s, tool_calls=%d", truncateTextForLog(message.Content), len(message.ToolCalls))
 				if message.Content != "" {
 					if !llmFirstTokenMarked {
 						firstTokenTs := time.Now().UnixMilli()
@@ -811,7 +844,7 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 					return result, nil
 				}
 
-				log.Debugf("LLM 响应: %+v", llmResponse)
+				log.Infof("LLM响应(传给TTS前), isStart=%v, isEnd=%v, text=%s, tool_calls=%d", llmResponse.IsStart, llmResponse.IsEnd, truncateTextForLog(llmResponse.Text), len(llmResponse.ToolCalls))
 
 				if len(llmResponse.ToolCalls) > 0 {
 					log.Debugf("获取到工具: %+v", llmResponse.ToolCalls)
@@ -895,7 +928,11 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 }
 
 func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Message, einoTools []*schema.ToolInfo, isSync bool, speakerResult *speaker.IdentifyResult) error {
-	log.Debugf("发送带工具的 LLM 请求, seesionID: %s, requestEinoMessages: %+v", l.clientState.SessionID, userMessage)
+	userMsgContent := ""
+	if userMessage != nil {
+		userMsgContent = userMessage.Content
+	}
+	log.Debugf("发送带工具的 LLM 请求, seesionID: %s, userMessage: %s", l.clientState.SessionID, truncateTextForLog(userMsgContent))
 	clientState := l.clientState
 
 	l.einoTools = einoTools
@@ -920,6 +957,8 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 			return nil
 		}
 	}
+
+	log.Infof("发送到LLM的请求, sessionID=%s, tools=%d, messages=%s", l.clientState.SessionID, len(einoTools), formatLLMRequestMessagesForLog(requestMessages))
 
 	clientState.SetStartLlmTs()
 	if l.session != nil {

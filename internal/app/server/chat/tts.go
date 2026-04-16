@@ -1126,11 +1126,11 @@ func (t *TTSManager) processTTSQueue(ctx context.Context) {
 		}
 
 		// 非流式：由 handleTts 生成并推送 SentenceStart → Frame… → SentenceEnd
-		log.Debugf("processTTSQueue start, text: %s", item.llmResponse.Text)
+		log.Debugf("processTTSQueue start, text: %s", truncateTextForLog(item.llmResponse.Text))
 		itemErr = t.handleTts(item.ctx, item.generation, item.metricCycle, item.llmResponse, item.onStartFunc, item.onEndFunc)
 		t.finishTtsMetricItem(item.ctx, item.metricCycle, itemErr)
 		cancel()
-		log.Debugf("processTTSQueue end, text: %s (pushed)", item.llmResponse.Text)
+		log.Debugf("processTTSQueue end, text: %s (pushed)", truncateTextForLog(item.llmResponse.Text))
 	}
 }
 
@@ -1161,7 +1161,7 @@ func (t *TTSManager) handleTts(ctx context.Context, generation uint64, metricCyc
 	}
 	outChan, release, genErr := t.generateTtsOnly(ctx, metricCycle, llmResponse)
 	if genErr != nil {
-		log.Errorf("handleTts gen err, text: %s, err: %v", llmResponse.Text, genErr)
+		log.Errorf("handleTts gen err, text: %s, err: %v", truncateTextForLog(llmResponse.Text), genErr)
 		if onEndFunc != nil {
 			onEndFunc(genErr)
 		}
@@ -1587,6 +1587,7 @@ func extractVoiceID(config map[string]interface{}) string {
 
 // generateTtsOnly 方案 C：仅做 TTS 生成，不发送；返回音频 channel 与发送完成后需调用的 ReleaseFunc
 func (t *TTSManager) generateTtsOnly(ctx context.Context, metricCycle uint64, llmResponse llm_common.LLMResponseStruct) (outputChan <-chan []byte, releaseFunc func(), err error) {
+	log.Infof("发送到TTS的文本, text=%s", truncateTextForLog(llmResponse.Text))
 	if strings.TrimSpace(llmResponse.Text) == "" {
 		return nil, nil, nil
 	}
@@ -1663,6 +1664,7 @@ func (t *TTSManager) handleDualStreamTts(item TTSQueueItem) (bool, error) {
 				if text == "" {
 					continue
 				}
+				log.Infof("发送到TTS的文本, text=%s", truncateTextForLog(text))
 				select {
 				case textChan <- text:
 				case <-item.ctx.Done():
