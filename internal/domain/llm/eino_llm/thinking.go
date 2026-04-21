@@ -7,7 +7,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+
+	log "xiaozhi-esp32-server-golang/logger"
 )
 
 const (
@@ -101,6 +104,17 @@ type thinkingRoundTripper struct {
 	tracker  *reasoningContentTracker
 }
 
+type loggingResponseReadCloser struct {
+	io.ReadCloser
+	provider   string
+	model      string
+	method     string
+	url        string
+	statusCode int
+	body       bytes.Buffer
+	logOnce    sync.Once
+}
+
 type reasoningContentTracker struct {
 	returned atomic.Bool
 }
@@ -142,6 +156,38 @@ func (r *reasoningDetectReadCloser) Read(p []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+func (r *loggingResponseReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 {
+		_, _ = r.body.Write(p[:n])
+	}
+	if err != nil {
+		if err == io.EOF {
+			r.log("completed", nil)
+		} else {
+			r.log("read_error", err)
+		}
+	}
+	return n, err
+}
+
+func (r *loggingResponseReadCloser) Close() error {
+	r.log("closed", nil)
+	return r.ReadCloser.Close()
+}
+
+func (r *loggingResponseReadCloser) log(stage string, err error) {
+	r.logOnce.Do(func() {
+		if err != nil {
+			log.Warnf("[Eino-LLM][OpenAI-Raw][Response] provider=%s model=%s method=%s url=%s status=%d stage=%s err=%v raw=%s",
+				r.provider, r.model, r.method, r.url, r.statusCode, stage, err, r.body.String())
+			return
+		}
+		log.Infof("[Eino-LLM][OpenAI-Raw][Response] provider=%s model=%s method=%s url=%s status=%d stage=%s raw=%s",
+			r.provider, r.model, r.method, r.url, r.statusCode, stage, r.body.String())
+	})
 }
 
 func extractNonEmptyReasoningContent(chunk string) (string, bool) {
@@ -216,10 +262,14 @@ func parseJSONStringValue(s string, start int) (string, bool) {
 
 func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req == nil || req.Body == nil || !t.needsPayloadRewrite() {
+		if req != nil && req.Body == nil {
+			t.logRequest(req, nil)
+		}
 		return t.roundTripAndWrap(req)
 	}
 
 	if req.Method != http.MethodPost {
+		t.logRequest(req, nil)
 		return t.roundTripAndWrap(req)
 	}
 
@@ -230,12 +280,16 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	_ = req.Body.Close()
 
 	if len(bytes.TrimSpace(bodyBytes)) == 0 {
-		return t.roundTripAndWrap(cloneRequestWithBody(req, bodyBytes))
+		clonedReq := cloneRequestWithBody(req, bodyBytes)
+		t.logRequest(clonedReq, bodyBytes)
+		return t.roundTripAndWrap(clonedReq)
 	}
 
 	var payload map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		return t.roundTripAndWrap(cloneRequestWithBody(req, bodyBytes))
+		clonedReq := cloneRequestWithBody(req, bodyBytes)
+		t.logRequest(clonedReq, bodyBytes)
+		return t.roundTripAndWrap(clonedReq)
 	}
 
 	rewritten := false
@@ -248,7 +302,9 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	}
 
 	if !rewritten {
-		return t.roundTripAndWrap(cloneRequestWithBody(req, bodyBytes))
+		clonedReq := cloneRequestWithBody(req, bodyBytes)
+		t.logRequest(clonedReq, bodyBytes)
+		return t.roundTripAndWrap(clonedReq)
 	}
 
 	newBody, err := json.Marshal(payload)
@@ -256,26 +312,64 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 		return nil, err
 	}
 
-	return t.roundTripAndWrap(cloneRequestWithBody(req, newBody))
+	clonedReq := cloneRequestWithBody(req, newBody)
+	t.logRequest(clonedReq, newBody)
+	return t.roundTripAndWrap(clonedReq)
 }
 
 func (t *thinkingRoundTripper) needsPayloadRewrite() bool {
-	if t == nil {
-		return false
-	}
-	return t.thinking.enabled() || shouldUseMaxCompletionTokens(t.provider, t.model)
+	return t != nil
 }
 
 func (t *thinkingRoundTripper) roundTripAndWrap(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
-	if err != nil || resp == nil || resp.Body == nil || t.tracker == nil {
+	if err != nil {
+		log.Warnf("[Eino-LLM][OpenAI-Raw][Response] provider=%s model=%s method=%s url=%s status=0 stage=transport_error err=%v raw=",
+			t.provider, t.model, requestMethod(req), requestURL(req), err)
 		return resp, err
 	}
-	resp.Body = &reasoningDetectReadCloser{
-		ReadCloser: resp.Body,
-		tracker:    t.tracker,
+	if resp == nil || resp.Body == nil {
+		return resp, err
+	}
+
+	var wrappedBody io.ReadCloser = resp.Body
+	if t.tracker != nil {
+		wrappedBody = &reasoningDetectReadCloser{
+			ReadCloser: wrappedBody,
+			tracker:    t.tracker,
+		}
+	}
+	resp.Body = &loggingResponseReadCloser{
+		ReadCloser: wrappedBody,
+		provider:   t.provider,
+		model:      t.model,
+		method:     requestMethod(req),
+		url:        requestURL(req),
+		statusCode: resp.StatusCode,
 	}
 	return resp, nil
+}
+
+func (t *thinkingRoundTripper) logRequest(req *http.Request, body []byte) {
+	if req == nil {
+		return
+	}
+	log.Infof("[Eino-LLM][OpenAI-Raw][Request] provider=%s model=%s method=%s url=%s raw=%s",
+		t.provider, t.model, requestMethod(req), requestURL(req), string(body))
+}
+
+func requestMethod(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	return req.Method
+}
+
+func requestURL(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ""
+	}
+	return req.URL.String()
 }
 
 func cloneRequestWithBody(req *http.Request, body []byte) *http.Request {
@@ -306,9 +400,6 @@ func buildThinkingHTTPClient(config map[string]interface{}, base *http.Client) *
 	}
 
 	thinking := parseThinkingConfig(config)
-	if !thinking.enabled() {
-		return base
-	}
 
 	parsed, err := decodeOpenAICompatibleConfig(config)
 	if err != nil {
@@ -317,7 +408,7 @@ func buildThinkingHTTPClient(config map[string]interface{}, base *http.Client) *
 
 	provider := parsed.Provider
 	if provider == "" {
-		return base
+		provider = "openai"
 	}
 
 	var tracker *reasoningContentTracker
