@@ -473,18 +473,6 @@ func (l *LLMManager) handleLLMWithContextAndTools(
 				if llm.IsLLMErrorMessage(message) {
 					errMsg := llm.LLMErrorMessage(message)
 					log.Warnf("LLM 返回错误: %s", errMsg)
-					if isNestedLLMRequest(ctx) {
-						select {
-						case <-ctx.Done():
-							log.Infof("上下文已取消，停止LLM错误处理: %v, context done, exit", ctx.Err())
-							return
-						case responseChannel <- llm_common.LLMResponseStruct{
-							Error: errMsg,
-							IsEnd: true,
-						}:
-						}
-						return
-					}
 					stop, pushErr := pushRawText(errMsg, true, nil)
 					if pushErr != nil {
 						log.Errorf("处理 LLM 错误输出失败: %v", pushErr)
@@ -930,10 +918,6 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 				}
 
 				log.Debugf("LLM 响应: %+v", llmResponse)
-
-				if llmResponse.Error != "" {
-					return result, fmt.Errorf("%s", llmResponse.Error)
-				}
 
 				if len(llmResponse.ToolCalls) > 0 {
 					log.Debugf("获取到工具: %+v", llmResponse.ToolCalls)
@@ -1388,7 +1372,7 @@ func waitForTTSTurnDrainIfRoot(ctx context.Context) error {
 	if ctx == nil {
 		return nil
 	}
-	if isNestedLLMRequest(ctx) {
+	if nest, ok := ctx.Value("nest").(int); ok && nest > 1 {
 		return nil
 	}
 
@@ -1398,14 +1382,6 @@ func waitForTTSTurnDrainIfRoot(ctx context.Context) error {
 	}
 
 	return tracker.Wait(ctx)
-}
-
-func isNestedLLMRequest(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	nest, ok := ctx.Value("nest").(int)
-	return ok && nest > 1
 }
 
 func appendToolRoundMessagesToContext(ctx context.Context, messages []*schema.Message) context.Context {

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 	"xiaozhi/manager/backend/models"
 
@@ -31,7 +30,7 @@ type SaveMessageRequest struct {
 	AgentID       string                 `json:"agent_id" binding:"required"`
 	SessionID     string                 `json:"session_id,omitempty"`
 	Role          string                 `json:"role" binding:"required,oneof=user assistant system tool"`
-	Content       string                 `json:"content"`
+	Content       string                 `json:"content" binding:"required"`
 	ToolCallID    string                 `json:"tool_call_id,omitempty"`    // 工具调用ID（Tool角色使用）
 	ToolCallsJSON *string                `json:"tool_calls_json,omitempty"` // 工具调用列表JSON（Assistant角色使用），nil 表示 NULL
 	AudioData     string                 `json:"audio_data,omitempty"`      // base64编码
@@ -45,10 +44,6 @@ type SaveMessageRequest struct {
 func (c *ChatHistoryController) SaveMessage(ctx *gin.Context) {
 	var req SaveMessageRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if err := validateSaveMessageRequest(req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -180,16 +175,6 @@ func (c *ChatHistoryController) SaveMessage(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusCreated, message)
-}
-
-func validateSaveMessageRequest(req SaveMessageRequest) error {
-	if strings.TrimSpace(req.Content) != "" {
-		return nil
-	}
-	if req.Role == "assistant" && req.ToolCallsJSON != nil && strings.TrimSpace(*req.ToolCallsJSON) != "" {
-		return nil
-	}
-	return fmt.Errorf("content不能为空")
 }
 
 // GetMessages 获取消息列表（按agentId汇总）
