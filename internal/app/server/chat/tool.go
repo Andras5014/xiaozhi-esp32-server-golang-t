@@ -505,16 +505,10 @@ func (l *LLMManager) emitToolFallbackResponse(ctx context.Context, text string) 
 }
 
 type structuredToolFallbackPayload struct {
-	Question      string                       `json:"question"`
-	Message       string                       `json:"message"`
-	Summary       map[string]interface{}       `json:"summary"`
-	MatchedFields []structuredToolMatchedField `json:"matched_fields"`
-}
-
-type structuredToolMatchedField struct {
-	Field string      `json:"field"`
-	Label string      `json:"label"`
-	Value interface{} `json:"value"`
+	Question      string                 `json:"question"`
+	Message       string                 `json:"message"`
+	Summary       map[string]interface{} `json:"summary"`
+	MatchedFields []string               `json:"matched_fields"`
 }
 
 func buildToolFallbackText(results []toolCallExecutionResult) string {
@@ -563,23 +557,10 @@ func formatStructuredToolFallback(raw string) string {
 	return "查询结果：" + formatToolFallbackSummary(payload.Summary)
 }
 
-func selectToolFallbackSummaryField(question string, matchedFields []structuredToolMatchedField, summary map[string]interface{}) (string, interface{}, bool) {
+func selectToolFallbackSummaryField(question string, matchedFields []string, summary map[string]interface{}) (string, interface{}, bool) {
 	for _, field := range matchedFields {
-		label := strings.TrimSpace(field.Label)
-		if label != "" {
-			if value, ok := summary[label]; ok {
-				return label, value, true
-			}
-			if field.Value != nil {
-				return label, field.Value, true
-			}
-		}
-
-		name := strings.TrimSpace(field.Field)
-		if name != "" {
-			if value, ok := summary[name]; ok {
-				return name, value, true
-			}
+		if value, ok := summary[field]; ok {
+			return field, value, true
 		}
 	}
 
