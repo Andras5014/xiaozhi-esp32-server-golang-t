@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	log "xiaozhi-esp32-server-golang/logger"
 )
 
 const (
@@ -16,6 +18,8 @@ const (
 	reasoningTrackerConfigKey = "__reasoning_content_tracker"
 	reasoningDetectConfigKey  = "__enable_reasoning_content_detection"
 	reasoningDetectTailSize   = 1024
+	compatDebugPayloadLimit   = 24 * 1024
+	compatDebugTextLimit      = 512
 )
 
 type thinkingConfig struct {
@@ -96,6 +100,7 @@ func normalizeThinkingConfig(raw *thinkingConfig) *thinkingConfig {
 type thinkingRoundTripper struct {
 	base     http.RoundTripper
 	provider string
+	baseURL  string
 	model    string
 	thinking thinkingConfig
 	tracker  *reasoningContentTracker
@@ -230,12 +235,16 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	_ = req.Body.Close()
 
 	if len(bytes.TrimSpace(bodyBytes)) == 0 {
-		return t.roundTripAndWrap(cloneRequestWithBody(req, bodyBytes))
+		clonedReq := cloneRequestWithBody(req, bodyBytes)
+		t.logCompatRequest(clonedReq, nil, bodyBytes)
+		return t.roundTripAndWrap(clonedReq)
 	}
 
 	var payload map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		return t.roundTripAndWrap(cloneRequestWithBody(req, bodyBytes))
+		clonedReq := cloneRequestWithBody(req, bodyBytes)
+		t.logCompatRequest(clonedReq, nil, bodyBytes)
+		return t.roundTripAndWrap(clonedReq)
 	}
 
 	rewritten := false
@@ -248,7 +257,9 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	}
 
 	if !rewritten {
-		return t.roundTripAndWrap(cloneRequestWithBody(req, bodyBytes))
+		clonedReq := cloneRequestWithBody(req, bodyBytes)
+		t.logCompatRequest(clonedReq, payload, bodyBytes)
+		return t.roundTripAndWrap(clonedReq)
 	}
 
 	newBody, err := json.Marshal(payload)
@@ -256,19 +267,40 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 		return nil, err
 	}
 
-	return t.roundTripAndWrap(cloneRequestWithBody(req, newBody))
+	clonedReq := cloneRequestWithBody(req, newBody)
+	t.logCompatRequest(clonedReq, payload, newBody)
+	return t.roundTripAndWrap(clonedReq)
 }
 
 func (t *thinkingRoundTripper) needsPayloadRewrite() bool {
 	if t == nil {
 		return false
 	}
-	return t.thinking.enabled() || shouldUseMaxCompletionTokens(t.provider, t.model)
+	return t.thinking.enabled() || shouldUseMaxCompletionTokens(t.provider, t.model) || shouldLogOpenAICompatDebug(t.provider, t.baseURL)
 }
 
 func (t *thinkingRoundTripper) roundTripAndWrap(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
-	if err != nil || resp == nil || resp.Body == nil || t.tracker == nil {
+	if err != nil {
+		if shouldLogOpenAICompatDebug(t.provider, requestURL(req)) {
+			log.Warnf("[Eino-LLM][Compat-Debug] provider=%s request failed before response: method=%s url=%s err=%v",
+				t.provider, requestMethod(req), requestURL(req), err)
+		}
+		return resp, err
+	}
+	if resp != nil && resp.Body != nil && shouldLogOpenAICompatDebug(t.provider, requestURL(req)) && resp.StatusCode >= http.StatusBadRequest {
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		if readErr != nil {
+			log.Warnf("[Eino-LLM][Compat-Debug] provider=%s response status=%d url=%s body_read_err=%v",
+				t.provider, resp.StatusCode, requestURL(req), readErr)
+		} else {
+			log.Warnf("[Eino-LLM][Compat-Debug] provider=%s response status=%d url=%s body=%s",
+				t.provider, resp.StatusCode, requestURL(req), truncateForCompatDebug(bodyBytes, compatDebugPayloadLimit))
+		}
+	}
+	if resp == nil || resp.Body == nil || t.tracker == nil {
 		return resp, err
 	}
 	resp.Body = &reasoningDetectReadCloser{
@@ -306,10 +338,6 @@ func buildThinkingHTTPClient(config map[string]interface{}, base *http.Client) *
 	}
 
 	thinking := parseThinkingConfig(config)
-	if !thinking.enabled() {
-		return base
-	}
-
 	parsed, err := decodeOpenAICompatibleConfig(config)
 	if err != nil {
 		return base
@@ -317,6 +345,9 @@ func buildThinkingHTTPClient(config map[string]interface{}, base *http.Client) *
 
 	provider := parsed.Provider
 	if provider == "" {
+		return base
+	}
+	if !thinking.enabled() && !shouldUseMaxCompletionTokens(provider, parsed.ModelName) && !shouldLogOpenAICompatDebug(provider, parsed.BaseURL) {
 		return base
 	}
 
@@ -333,11 +364,263 @@ func buildThinkingHTTPClient(config map[string]interface{}, base *http.Client) *
 	cloned.Transport = &thinkingRoundTripper{
 		base:     transport,
 		provider: provider,
+		baseURL:  parsed.BaseURL,
 		model:    parsed.ModelName,
 		thinking: thinking,
 		tracker:  tracker,
 	}
 	return &cloned
+}
+
+func shouldLogOpenAICompatDebug(provider, endpoint string) bool {
+	if strings.EqualFold(strings.TrimSpace(provider), "xunfei") {
+		return true
+	}
+
+	lowerEndpoint := strings.ToLower(strings.TrimSpace(endpoint))
+	return strings.Contains(lowerEndpoint, "xfyun") ||
+		strings.Contains(lowerEndpoint, "xunfei") ||
+		strings.Contains(lowerEndpoint, "spark-api") ||
+		strings.Contains(lowerEndpoint, "xinghuo")
+}
+
+func (t *thinkingRoundTripper) logCompatRequest(req *http.Request, payload map[string]interface{}, body []byte) {
+	if !shouldLogOpenAICompatDebug(t.provider, requestURL(req)) {
+		return
+	}
+	summary := summarizeCompatPayload(payload)
+	log.Infof("[Eino-LLM][Compat-Debug] provider=%s method=%s url=%s summary=%s raw=%s",
+		t.provider,
+		requestMethod(req),
+		requestURL(req),
+		marshalCompatDebugValue(summary),
+		truncateForCompatDebug(body, compatDebugPayloadLimit),
+	)
+}
+
+func requestMethod(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	return req.Method
+}
+
+func requestURL(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ""
+	}
+	return req.URL.String()
+}
+
+func summarizeCompatPayload(payload map[string]interface{}) map[string]interface{} {
+	if len(payload) == 0 {
+		return map[string]interface{}{}
+	}
+
+	summary := map[string]interface{}{
+		"model":        payload["model"],
+		"stream":       payload["stream"],
+		"tool_choice":  payload["tool_choice"],
+		"messages":     summarizeCompatMessages(payload["messages"]),
+		"tools_count":  summarizeCompatToolsCount(payload["tools"]),
+		"tool_names":   summarizeCompatToolNames(payload["tools"]),
+		"max_tokens":   firstCompatValue(payload, "max_tokens", "max_completion_tokens"),
+		"temperature":  payload["temperature"],
+		"top_p":        payload["top_p"],
+		"response_fmt": payload["response_format"],
+	}
+
+	return summary
+}
+
+func summarizeCompatMessages(raw interface{}) []map[string]interface{} {
+	items, ok := raw.([]interface{})
+	if !ok || len(items) == 0 {
+		return nil
+	}
+
+	summary := make([]map[string]interface{}, 0, len(items))
+	for idx, item := range items {
+		msg, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		entry := map[string]interface{}{
+			"idx":            idx,
+			"role":           msg["role"],
+			"name":           msg["name"],
+			"content_exists": compatMapHasKey(msg, "content"),
+			"content":        summarizeCompatContent(msg["content"]),
+			"tool_call_id":   msg["tool_call_id"],
+			"tool_calls":     summarizeCompatToolCalls(msg["tool_calls"]),
+		}
+
+		if value, ok := msg["content"]; ok && value == nil {
+			entry["content_is_null"] = true
+		}
+
+		summary = append(summary, entry)
+	}
+
+	return summary
+}
+
+func summarizeCompatContent(raw interface{}) interface{} {
+	switch typed := raw.(type) {
+	case string:
+		return truncateStringForCompatDebug(typed, compatDebugTextLimit)
+	case []interface{}:
+		parts := make([]map[string]interface{}, 0, len(typed))
+		for _, part := range typed {
+			partMap, ok := part.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			entry := map[string]interface{}{
+				"type": partMap["type"],
+			}
+			if text, ok := partMap["text"].(string); ok {
+				entry["text"] = truncateStringForCompatDebug(text, compatDebugTextLimit)
+			}
+			parts = append(parts, entry)
+		}
+		return parts
+	default:
+		return raw
+	}
+}
+
+func summarizeCompatToolCalls(raw interface{}) []map[string]interface{} {
+	items, ok := raw.([]interface{})
+	if !ok || len(items) == 0 {
+		return nil
+	}
+
+	summary := make([]map[string]interface{}, 0, len(items))
+	for _, item := range items {
+		tc, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		entry := map[string]interface{}{
+			"id":   tc["id"],
+			"type": tc["type"],
+		}
+		if fn, ok := tc["function"].(map[string]interface{}); ok {
+			entry["function"] = map[string]interface{}{
+				"name":      fn["name"],
+				"arguments": truncateStringForCompatDebug(asCompatString(fn["arguments"]), compatDebugTextLimit),
+			}
+		}
+		summary = append(summary, entry)
+	}
+	return summary
+}
+
+func summarizeCompatToolsCount(raw interface{}) int {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return 0
+	}
+	return len(items)
+}
+
+func summarizeCompatToolNames(raw interface{}) []string {
+	items, ok := raw.([]interface{})
+	if !ok || len(items) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		toolMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if fn, ok := toolMap["function"].(map[string]interface{}); ok {
+			name := strings.TrimSpace(asCompatString(fn["name"]))
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
+func firstCompatValue(payload map[string]interface{}, keys ...string) interface{} {
+	for _, key := range keys {
+		if value, ok := payload[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func compatMapHasKey(input map[string]interface{}, key string) bool {
+	if input == nil {
+		return false
+	}
+	_, ok := input[key]
+	return ok
+}
+
+func asCompatString(v interface{}) string {
+	if str, ok := v.(string); ok {
+		return str
+	}
+	if v == nil {
+		return ""
+	}
+	return marshalCompatDebugValue(v)
+}
+
+func marshalCompatDebugValue(v interface{}) string {
+	if v == nil {
+		return "null"
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return strconv.Quote(truncateStringForCompatDebug(asCompatStringFallback(v), compatDebugTextLimit))
+	}
+	return string(data)
+}
+
+func asCompatStringFallback(v interface{}) string {
+	switch typed := v.(type) {
+	case string:
+		return typed
+	default:
+		return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(marshalCompatDebugValueWithoutJSON(v)), "\r", " "), "\n", " "))
+	}
+}
+
+func marshalCompatDebugValueWithoutJSON(v interface{}) string {
+	return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(marshalCompatDebugValueSafe(v)), `"`), `"`)), "\r", " "), "\n", " "))
+}
+
+func marshalCompatDebugValueSafe(v interface{}) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func truncateForCompatDebug(body []byte, limit int) string {
+	text := string(body)
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "...(truncated)"
+}
+
+func truncateStringForCompatDebug(s string, limit int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(s, "\r", " "), "\n", " "))
+	if len(s) <= limit {
+		return s
+	}
+	return s[:limit] + "...(truncated)"
 }
 
 func resolvePayloadModel(payload map[string]interface{}, fallback string) string {

@@ -152,7 +152,13 @@ func TestBuildToolFallbackTextUsesStructuredSummary(t *testing.T) {
 					"    \"危大方案总数\": 2948,\n" +
 					"    \"专项施工方案总数\": 7231\n" +
 					"  },\n" +
-					"  \"matched_fields\": []\n" +
+					"  \"matched_fields\": [\n" +
+					"    {\n" +
+					"      \"field\": \"dangerNum\",\n" +
+					"      \"label\": \"危大方案总数\",\n" +
+					"      \"value\": 2948\n" +
+					"    }\n" +
+					"  ]\n" +
 					"}",
 			},
 		},
