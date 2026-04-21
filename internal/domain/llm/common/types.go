@@ -15,6 +15,7 @@ const (
 
 type LLMResponseStruct struct {
 	Text      string            `json:"text,omitempty"`
+	Error     string            `json:"error,omitempty"`
 	IsStart   bool              `json:"is_start"`
 	IsEnd     bool              `json:"is_end"`
 	ToolCalls []schema.ToolCall `json:"tool_calls,omitempty"`

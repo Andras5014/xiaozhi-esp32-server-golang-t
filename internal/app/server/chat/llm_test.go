@@ -3,11 +3,13 @@ package chat
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	data_client "xiaozhi-esp32-server-golang/internal/data/client"
 	config_types "xiaozhi-esp32-server-golang/internal/domain/config/types"
+	llm_common "xiaozhi-esp32-server-golang/internal/domain/llm/common"
 
 	"github.com/cloudwego/eino/schema"
 	mcp_go "github.com/mark3labs/mcp-go/mcp"
@@ -135,6 +137,48 @@ func TestGetMessagesIgnoresToolRoundMessagesOutsideNoneMode(t *testing.T) {
 	}
 	if messages[1].Content != historyUser.Content {
 		t.Fatalf("expected short memory mode to keep dialogue history, got %q", messages[1].Content)
+	}
+}
+
+func TestBuildToolFallbackTextUsesStructuredSummary(t *testing.T) {
+	results := []toolCallExecutionResult{
+		{
+			message: &schema.Message{
+				Role: schema.Tool,
+				Content: "{\n" +
+					"  \"question\": \"危险方案总数\",\n" +
+					"  \"message\": \"操作成功\",\n" +
+					"  \"summary\": {\n" +
+					"    \"危大方案总数\": 2948,\n" +
+					"    \"专项施工方案总数\": 7231\n" +
+					"  },\n" +
+					"  \"matched_fields\": []\n" +
+					"}",
+			},
+		},
+	}
+
+	text := buildToolFallbackText(results)
+	if text != "危大方案总数：2948" {
+		t.Fatalf("expected structured fallback answer, got %q", text)
+	}
+}
+
+func TestHandleLLMResponseReturnsNestedError(t *testing.T) {
+	manager := newTestLLMManager(data_client.MemoryModeNone)
+	responseChan := make(chan llm_common.LLMResponseStruct, 1)
+	responseChan <- llm_common.LLMResponseStruct{
+		Error: "nested llm failure",
+		IsEnd: true,
+	}
+	close(responseChan)
+
+	ctx := context.WithValue(context.Background(), "nest", 2)
+	ctx = context.WithValue(ctx, fullTextKey, &strings.Builder{})
+
+	_, err := manager.handleLLMResponse(ctx, nil, responseChan)
+	if err == nil || !strings.Contains(err.Error(), "nested llm failure") {
+		t.Fatalf("expected nested LLM error to propagate, got %v", err)
 	}
 }
 

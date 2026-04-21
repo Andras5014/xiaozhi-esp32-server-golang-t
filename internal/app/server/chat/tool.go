@@ -12,6 +12,7 @@ import (
 
 	data_client "xiaozhi-esp32-server-golang/internal/data/client"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
+	llm_common "xiaozhi-esp32-server-golang/internal/domain/llm/common"
 	"xiaozhi-esp32-server-golang/internal/domain/mcp"
 	log "xiaozhi-esp32-server-golang/logger"
 
@@ -103,7 +104,22 @@ func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema
 
 	// 如果工具调用成功且没有被标记为停止处理，则继续LLM调用
 	if invokeToolSuccess && !shouldStopLLMProcessing {
-		l.DoLLmRequest(ctx, nil, l.einoTools, true, nil)
+		if err := l.continueToolCallLLMResponse(ctx); err != nil {
+			log.Warnf("工具调用后二次 LLM 续答失败，使用本地回退响应: %v", err)
+			fallbackText := buildToolFallbackText(results)
+			if strings.TrimSpace(fallbackText) == "" {
+				return toolCallResponseSummary{
+					invokeToolSuccess: invokeToolSuccess,
+					hasMediaOutput:    hasMediaOutput,
+				}, err
+			}
+			if fallbackErr := l.emitToolFallbackResponse(ctx, fallbackText); fallbackErr != nil {
+				return toolCallResponseSummary{
+					invokeToolSuccess: invokeToolSuccess,
+					hasMediaOutput:    hasMediaOutput,
+				}, fmt.Errorf("工具续答失败: %v; 本地回退失败: %w", err, fallbackErr)
+			}
+		}
 	}
 
 	return toolCallResponseSummary{
@@ -453,4 +469,177 @@ func (l *LLMManager) handleToolResult(toolResultStr string) (mcp_go.CallToolResu
 	}
 
 	return toolResult, true
+}
+
+func (l *LLMManager) continueToolCallLLMResponse(ctx context.Context) error {
+	err := l.DoLLmRequest(ctx, nil, l.einoTools, true, nil)
+	if err == nil || len(l.einoTools) == 0 {
+		return err
+	}
+
+	log.Warnf("工具调用后带工具续答失败，尝试无工具续答: %v", err)
+	retryErr := l.DoLLmRequest(ctx, nil, nil, true, nil)
+	if retryErr == nil {
+		return nil
+	}
+
+	return fmt.Errorf("带工具续答失败: %v; 无工具重试失败: %w", err, retryErr)
+}
+
+func (l *LLMManager) emitToolFallbackResponse(ctx context.Context, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("工具回退内容为空")
+	}
+
+	fallbackChan := make(chan llm_common.LLMResponseStruct, 1)
+	fallbackChan <- llm_common.LLMResponseStruct{
+		Text:    text,
+		IsStart: true,
+		IsEnd:   true,
+	}
+	close(fallbackChan)
+
+	_, err := l.HandleLLMResponseChannelSync(ctx, nil, fallbackChan, nil)
+	return err
+}
+
+type structuredToolFallbackPayload struct {
+	Question      string                 `json:"question"`
+	Message       string                 `json:"message"`
+	Summary       map[string]interface{} `json:"summary"`
+	MatchedFields []string               `json:"matched_fields"`
+}
+
+func buildToolFallbackText(results []toolCallExecutionResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(results))
+	for _, result := range results {
+		if result.message == nil {
+			continue
+		}
+		content := normalizeToolFallbackText(result.message.Content)
+		if content == "" {
+			continue
+		}
+		parts = append(parts, content)
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+func normalizeToolFallbackText(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	if summary := formatStructuredToolFallback(raw); summary != "" {
+		return summary
+	}
+
+	return raw
+}
+
+func formatStructuredToolFallback(raw string) string {
+	var payload structuredToolFallbackPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil || len(payload.Summary) == 0 {
+		return ""
+	}
+
+	if key, value, ok := selectToolFallbackSummaryField(payload.Question, payload.MatchedFields, payload.Summary); ok {
+		return fmt.Sprintf("%s：%s", key, formatToolFallbackValue(value))
+	}
+
+	return "查询结果：" + formatToolFallbackSummary(payload.Summary)
+}
+
+func selectToolFallbackSummaryField(question string, matchedFields []string, summary map[string]interface{}) (string, interface{}, bool) {
+	for _, field := range matchedFields {
+		if value, ok := summary[field]; ok {
+			return field, value, true
+		}
+	}
+
+	normalizedQuestion := normalizeToolFallbackMetricLabel(question)
+	if normalizedQuestion == "" {
+		return "", nil, false
+	}
+
+	keys := make([]string, 0, len(summary))
+	for key := range summary {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		normalizedKey := normalizeToolFallbackMetricLabel(key)
+		if normalizedKey == "" {
+			continue
+		}
+		if strings.Contains(normalizedQuestion, normalizedKey) || strings.Contains(normalizedKey, normalizedQuestion) {
+			return key, summary[key], true
+		}
+	}
+
+	if len(keys) == 1 {
+		key := keys[0]
+		return key, summary[key], true
+	}
+
+	return "", nil, false
+}
+
+func normalizeToolFallbackMetricLabel(s string) string {
+	replacer := strings.NewReplacer(
+		" ", "",
+		"\t", "",
+		"\r", "",
+		"\n", "",
+		"超危险", "超危大",
+		"危险", "危大",
+		"总数", "",
+		"数量", "",
+		"个数", "",
+		"多少", "",
+	)
+	return replacer.Replace(strings.ToLower(strings.TrimSpace(s)))
+}
+
+func formatToolFallbackSummary(summary map[string]interface{}) string {
+	if len(summary) == 0 {
+		return ""
+	}
+
+	keys := make([]string, 0, len(summary))
+	for key := range summary {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s %s", key, formatToolFallbackValue(summary[key])))
+	}
+
+	return strings.Join(parts, "；")
+}
+
+func formatToolFallbackValue(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	case float64:
+		if typed == float64(int64(typed)) {
+			return fmt.Sprintf("%d", int64(typed))
+		}
+		return fmt.Sprintf("%v", typed)
+	default:
+		return fmt.Sprintf("%v", typed)
+	}
 }
