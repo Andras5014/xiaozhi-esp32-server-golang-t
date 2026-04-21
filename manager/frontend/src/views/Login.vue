@@ -3,7 +3,7 @@
     <el-card class="login-card">
       <template #header>
         <div class="card-header">
-          <h2>小智管理系统</h2>
+          <h2>布法罗管理系统</h2>
         </div>
       </template>
       

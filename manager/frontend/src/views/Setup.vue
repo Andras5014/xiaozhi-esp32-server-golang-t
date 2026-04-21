@@ -3,7 +3,7 @@
     <div class="setup-card">
       <div class="setup-header">
         <h1>系统初始化</h1>
-        <p>欢迎使用小智管理系统，请完成初始设置</p>
+        <p>欢迎使用布法罗管理系统，请完成初始设置</p>
       </div>
 
       <!-- 检查状态 -->

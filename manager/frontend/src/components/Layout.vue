@@ -3,7 +3,7 @@
   <el-container v-if="!isMobileDevice" class="layout-container">
     <el-aside width="250px" class="sidebar">
       <div class="logo">
-        <h3>小智管理系统</h3>
+        <h3>布法罗管理系统</h3>
       </div>
       <el-menu
         :default-active="$route.path"
