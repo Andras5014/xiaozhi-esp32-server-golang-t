@@ -221,11 +221,11 @@ func parseJSONStringValue(s string, start int) (string, bool) {
 
 func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req == nil || req.Body == nil || !t.needsPayloadRewrite() {
-		return t.roundTripAndWrap(req)
+		return t.roundTripAndWrap(req, nil, nil)
 	}
 
 	if req.Method != http.MethodPost {
-		return t.roundTripAndWrap(req)
+		return t.roundTripAndWrap(req, nil, nil)
 	}
 
 	bodyBytes, err := io.ReadAll(req.Body)
@@ -236,15 +236,13 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 
 	if len(bytes.TrimSpace(bodyBytes)) == 0 {
 		clonedReq := cloneRequestWithBody(req, bodyBytes)
-		t.logCompatRequest(clonedReq, nil, bodyBytes)
-		return t.roundTripAndWrap(clonedReq)
+		return t.roundTripAndWrap(clonedReq, nil, bodyBytes)
 	}
 
 	var payload map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 		clonedReq := cloneRequestWithBody(req, bodyBytes)
-		t.logCompatRequest(clonedReq, nil, bodyBytes)
-		return t.roundTripAndWrap(clonedReq)
+		return t.roundTripAndWrap(clonedReq, nil, bodyBytes)
 	}
 
 	rewritten := false
@@ -258,8 +256,7 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 
 	if !rewritten {
 		clonedReq := cloneRequestWithBody(req, bodyBytes)
-		t.logCompatRequest(clonedReq, payload, bodyBytes)
-		return t.roundTripAndWrap(clonedReq)
+		return t.roundTripAndWrap(clonedReq, payload, bodyBytes)
 	}
 
 	newBody, err := json.Marshal(payload)
@@ -268,24 +265,17 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	}
 
 	clonedReq := cloneRequestWithBody(req, newBody)
-	t.logCompatRequest(clonedReq, payload, newBody)
-	return t.roundTripAndWrap(clonedReq)
+	return t.roundTripAndWrap(clonedReq, payload, newBody)
 }
 
 func (t *thinkingRoundTripper) needsPayloadRewrite() bool {
-	if t == nil {
-		return false
-	}
-	return t.thinking.enabled() || shouldUseMaxCompletionTokens(t.provider, t.model) || shouldLogOpenAICompatDebug(t.provider, t.baseURL)
+	return t != nil
 }
 
-func (t *thinkingRoundTripper) roundTripAndWrap(req *http.Request) (*http.Response, error) {
+func (t *thinkingRoundTripper) roundTripAndWrap(req *http.Request, payload map[string]interface{}, body []byte) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
-		if shouldLogOpenAICompatDebug(t.provider, requestURL(req)) {
-			log.Warnf("[Eino-LLM][Compat-Debug] provider=%s request failed before response: method=%s url=%s err=%v",
-				t.provider, requestMethod(req), requestURL(req), err)
-		}
+		t.logCompatFailure(req, payload, body, 0, "", err)
 		return resp, err
 	}
 	if resp != nil && resp.Body != nil && shouldLogOpenAICompatDebug(t.provider, requestURL(req)) && resp.StatusCode >= http.StatusBadRequest {
@@ -293,11 +283,9 @@ func (t *thinkingRoundTripper) roundTripAndWrap(req *http.Request) (*http.Respon
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		if readErr != nil {
-			log.Warnf("[Eino-LLM][Compat-Debug] provider=%s response status=%d url=%s body_read_err=%v",
-				t.provider, resp.StatusCode, requestURL(req), readErr)
+			t.logCompatFailure(req, payload, body, resp.StatusCode, "", readErr)
 		} else {
-			log.Warnf("[Eino-LLM][Compat-Debug] provider=%s response status=%d url=%s body=%s",
-				t.provider, resp.StatusCode, requestURL(req), truncateForCompatDebug(bodyBytes, compatDebugPayloadLimit))
+			t.logCompatFailure(req, payload, body, resp.StatusCode, truncateForCompatDebug(bodyBytes, compatDebugPayloadLimit), nil)
 		}
 	}
 	if resp == nil || resp.Body == nil || t.tracker == nil {
@@ -345,10 +333,7 @@ func buildThinkingHTTPClient(config map[string]interface{}, base *http.Client) *
 
 	provider := parsed.Provider
 	if provider == "" {
-		return base
-	}
-	if !thinking.enabled() && !shouldUseMaxCompletionTokens(provider, parsed.ModelName) && !shouldLogOpenAICompatDebug(provider, parsed.BaseURL) {
-		return base
+		provider = "openai"
 	}
 
 	var tracker *reasoningContentTracker
@@ -373,15 +358,7 @@ func buildThinkingHTTPClient(config map[string]interface{}, base *http.Client) *
 }
 
 func shouldLogOpenAICompatDebug(provider, endpoint string) bool {
-	if strings.EqualFold(strings.TrimSpace(provider), "xunfei") {
-		return true
-	}
-
-	lowerEndpoint := strings.ToLower(strings.TrimSpace(endpoint))
-	return strings.Contains(lowerEndpoint, "xfyun") ||
-		strings.Contains(lowerEndpoint, "xunfei") ||
-		strings.Contains(lowerEndpoint, "spark-api") ||
-		strings.Contains(lowerEndpoint, "xinghuo")
+	return true
 }
 
 func (t *thinkingRoundTripper) logCompatRequest(req *http.Request, payload map[string]interface{}, body []byte) {
@@ -395,6 +372,37 @@ func (t *thinkingRoundTripper) logCompatRequest(req *http.Request, payload map[s
 		requestURL(req),
 		marshalCompatDebugValue(summary),
 		truncateForCompatDebug(body, compatDebugPayloadLimit),
+	)
+}
+
+func (t *thinkingRoundTripper) logCompatFailure(req *http.Request, payload map[string]interface{}, body []byte, statusCode int, responseBody string, err error) {
+	if !shouldLogOpenAICompatDebug(t.provider, requestURL(req)) {
+		return
+	}
+
+	summary := summarizeCompatPayload(payload)
+	if err != nil {
+		log.Warnf("[Eino-LLM][Compat-Debug] provider=%s method=%s url=%s status=%d err=%v summary=%s raw=%s response=%s",
+			t.provider,
+			requestMethod(req),
+			requestURL(req),
+			statusCode,
+			err,
+			marshalCompatDebugValue(summary),
+			truncateForCompatDebug(body, compatDebugPayloadLimit),
+			responseBody,
+		)
+		return
+	}
+
+	log.Warnf("[Eino-LLM][Compat-Debug] provider=%s method=%s url=%s status=%d summary=%s raw=%s response=%s",
+		t.provider,
+		requestMethod(req),
+		requestURL(req),
+		statusCode,
+		marshalCompatDebugValue(summary),
+		truncateForCompatDebug(body, compatDebugPayloadLimit),
+		responseBody,
 	)
 }
 
