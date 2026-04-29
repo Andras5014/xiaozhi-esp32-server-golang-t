@@ -1,6 +1,7 @@
 package eino_llm
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -197,10 +198,10 @@ func TestEinoLLMProvider_ResponseWithEinoMessages(t *testing.T) {
 
 	// 测试Response方法 - 注意：这将尝试真实API调用
 	// 在没有真实API密钥的情况下，这会失败，但我们主要测试结构
-	responseChan := provider.Response("test_session", messages)
-	var responses []string
-	for content := range responseChan {
-		responses = append(responses, content)
+	responseChan := provider.ResponseWithContext(context.Background(), "test_session", messages, nil)
+	var responses []*schema.Message
+	for response := range responseChan {
+		responses = append(responses, response)
 		break // 只获取第一个响应以避免长时间等待
 	}
 
@@ -238,7 +239,7 @@ func TestEinoLLMProvider_ResponseWithFunctionsEinoTypes(t *testing.T) {
 	}
 
 	// 测试ResponseWithFunctions方法 - 仅验证结构
-	responseChan := provider.ResponseWithFunctions("test_session", messages, tools)
+	responseChan := provider.ResponseWithContext(context.Background(), "test_session", messages, tools)
 	go func() {
 		for range responseChan {
 			// 消费响应但不验证内容
@@ -285,7 +286,7 @@ func BenchmarkEinoLLMProvider_Response(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		responseChan := provider.Response("bench_session", messages)
+		responseChan := provider.ResponseWithContext(context.Background(), "bench_session", messages, nil)
 		// 消费响应以完成调用
 		go func() {
 			for range responseChan {
@@ -362,7 +363,7 @@ func TestEinoLLMProvider_FullWorkflow(t *testing.T) {
 	}
 
 	// 仅验证函数调用不会panic，不验证响应内容
-	responseChan := provider.Response("full_workflow_test", messages)
+	responseChan := provider.ResponseWithContext(context.Background(), "full_workflow_test", messages, nil)
 	go func() {
 		for range responseChan {
 			// 消费响应但不验证内容
@@ -416,7 +417,7 @@ func TestMultipleProviderTypes(t *testing.T) {
 			}
 
 			// 仅验证函数调用不会panic
-			responseChan := provider.Response("multi_provider_test", messages)
+			responseChan := provider.ResponseWithContext(context.Background(), "multi_provider_test", messages, nil)
 			go func() {
 				for range responseChan {
 					// 消费响应

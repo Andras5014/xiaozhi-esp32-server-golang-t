@@ -2,11 +2,13 @@ package eino_llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -15,7 +17,12 @@ const (
 	reasoningContentMarker    = "\"reasoning_content\""
 	reasoningTrackerConfigKey = "__reasoning_content_tracker"
 	reasoningDetectConfigKey  = "__enable_reasoning_content_detection"
+	reasoningStoreConfigKey   = "__reasoning_content_store"
 	reasoningDetectTailSize   = 1024
+	reasoningContentExtraKey  = "reasoning_content"
+
+	maxReasoningSessions            = 256
+	maxReasoningToolCallsPerSession = 64
 )
 
 type thinkingConfig struct {
@@ -99,15 +106,90 @@ type thinkingRoundTripper struct {
 	model    string
 	thinking thinkingConfig
 	tracker  *reasoningContentTracker
+	store    *reasoningSessionStore
 }
 
 type reasoningContentTracker struct {
 	returned atomic.Bool
+	mu       sync.RWMutex
+	content  strings.Builder
 }
 
-func (t *reasoningContentTracker) MarkReturned() {
-	if t != nil {
-		t.returned.Store(true)
+type reasoningSessionStore struct {
+	mu           sync.RWMutex
+	sessionOrder []string
+	sessions     map[string]*reasoningSessionEntry
+}
+
+type reasoningSessionEntry struct {
+	order  []string
+	values map[string]string
+}
+
+type reasoningSessionContextKey struct{}
+
+func withReasoningSessionID(ctx context.Context, sessionID string) context.Context {
+	sessionID = strings.TrimSpace(sessionID)
+	if ctx == nil || sessionID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, reasoningSessionContextKey{}, sessionID)
+}
+
+func reasoningSessionIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	sessionID, _ := ctx.Value(reasoningSessionContextKey{}).(string)
+	return strings.TrimSpace(sessionID)
+}
+
+func newReasoningSessionStore() *reasoningSessionStore {
+	return &reasoningSessionStore{
+		sessions: make(map[string]*reasoningSessionEntry),
+	}
+}
+
+func (s *reasoningSessionStore) StoreToolCallReasoning(sessionID string, toolCallIDs []string, content string) {
+	if s == nil {
+		return
+	}
+
+	sessionID = strings.TrimSpace(sessionID)
+	content = strings.TrimSpace(content)
+	if sessionID == "" || content == "" || len(toolCallIDs) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, exists := s.sessions[sessionID]
+	if !exists {
+		if len(s.sessions) >= maxReasoningSessions && len(s.sessionOrder) > 0 {
+			evictSessionID := s.sessionOrder[0]
+			s.sessionOrder = s.sessionOrder[1:]
+			delete(s.sessions, evictSessionID)
+		}
+		entry = &reasoningSessionEntry{values: make(map[string]string)}
+		s.sessions[sessionID] = entry
+		s.sessionOrder = append(s.sessionOrder, sessionID)
+	}
+
+	for _, toolCallID := range toolCallIDs {
+		toolCallID = strings.TrimSpace(toolCallID)
+		if toolCallID == "" {
+			continue
+		}
+		if _, exists := entry.values[toolCallID]; !exists {
+			if len(entry.order) >= maxReasoningToolCallsPerSession {
+				evictToolCallID := entry.order[0]
+				entry.order = entry.order[1:]
+				delete(entry.values, evictToolCallID)
+			}
+			entry.order = append(entry.order, toolCallID)
+		}
+		entry.values[toolCallID] = content
 	}
 }
 
@@ -115,8 +197,40 @@ func (t *reasoningContentTracker) HasReturned() bool {
 	return t != nil && t.returned.Load()
 }
 
+func (t *reasoningContentTracker) AppendContent(content string) {
+	if t == nil {
+		return
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.content.Len() > 0 {
+		t.content.WriteString(content)
+	} else {
+		t.content.WriteString(content)
+	}
+	t.returned.Store(true)
+}
+
+func (t *reasoningContentTracker) Content() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.content.String()
+}
+
 func (t *reasoningContentTracker) Reset() {
 	if t != nil {
+		t.mu.Lock()
+		t.content.Reset()
+		t.mu.Unlock()
 		t.returned.Store(false)
 	}
 }
@@ -124,43 +238,84 @@ func (t *reasoningContentTracker) Reset() {
 type reasoningDetectReadCloser struct {
 	io.ReadCloser
 	tracker *reasoningContentTracker
-	tail    string
+	buffer  string
 }
 
 func (r *reasoningDetectReadCloser) Read(p []byte) (int, error) {
 	n, err := r.ReadCloser.Read(p)
-	if n > 0 && r.tracker != nil && !r.tracker.HasReturned() {
-		chunk := r.tail + string(p[:n])
-		if content, ok := extractNonEmptyReasoningContent(chunk); ok {
-			r.tracker.MarkReturned()
-			_ = content
-		}
-		if len(chunk) > reasoningDetectTailSize {
-			r.tail = chunk[len(chunk)-reasoningDetectTailSize:]
-		} else {
-			r.tail = chunk
-		}
+	if n > 0 && r.tracker != nil {
+		r.buffer += string(p[:n])
+		r.processBuffered(false)
+	}
+	if err == io.EOF && r.tracker != nil {
+		r.processBuffered(true)
 	}
 	return n, err
 }
 
-func extractNonEmptyReasoningContent(chunk string) (string, bool) {
+func (r *reasoningDetectReadCloser) processBuffered(flush bool) {
+	for {
+		newlineIdx := strings.IndexByte(r.buffer, '\n')
+		if newlineIdx < 0 {
+			break
+		}
+		r.processChunk(r.buffer[:newlineIdx])
+		r.buffer = r.buffer[newlineIdx+1:]
+	}
+
+	if flush {
+		if strings.TrimSpace(r.buffer) != "" {
+			r.processChunk(r.buffer)
+		}
+		r.buffer = ""
+		return
+	}
+
+	if len(r.buffer) > reasoningDetectTailSize {
+		r.buffer = r.buffer[len(r.buffer)-reasoningDetectTailSize:]
+	}
+}
+
+func (r *reasoningDetectReadCloser) processChunk(raw string) {
+	if r == nil || r.tracker == nil {
+		return
+	}
+
+	payload := strings.TrimSpace(raw)
+	if payload == "" {
+		return
+	}
+	if strings.HasPrefix(payload, "data:") {
+		payload = strings.TrimSpace(strings.TrimPrefix(payload, "data:"))
+	}
+	if payload == "" || payload == "[DONE]" {
+		return
+	}
+
+	for _, content := range extractReasoningContentValues(payload) {
+		r.tracker.AppendContent(content)
+	}
+}
+
+func extractReasoningContentValues(chunk string) []string {
+	values := make([]string, 0, 1)
 	searchFrom := 0
 	for {
 		idx := strings.Index(chunk[searchFrom:], reasoningContentMarker)
 		if idx < 0 {
-			return "", false
+			return values
 		}
 		idx += searchFrom + len(reasoningContentMarker)
 
 		pos := skipJSONWhitespace(chunk, idx)
 		if pos >= len(chunk) || chunk[pos] != ':' {
-			return "", false
+			searchFrom = idx
+			continue
 		}
 
 		pos = skipJSONWhitespace(chunk, pos+1)
 		if pos >= len(chunk) {
-			return "", false
+			return values
 		}
 
 		if chunk[pos] != '"' {
@@ -168,14 +323,14 @@ func extractNonEmptyReasoningContent(chunk string) (string, bool) {
 			continue
 		}
 
-		content, complete := parseJSONStringValue(chunk, pos)
+		content, nextPos, complete := parseJSONStringValue(chunk, pos)
 		if !complete {
-			return "", false
+			return values
 		}
 		if strings.TrimSpace(content) != "" {
-			return content, true
+			values = append(values, content)
 		}
-		searchFrom = pos + 1
+		searchFrom = nextPos
 	}
 }
 
@@ -191,9 +346,9 @@ func skipJSONWhitespace(s string, pos int) int {
 	return pos
 }
 
-func parseJSONStringValue(s string, start int) (string, bool) {
+func parseJSONStringValue(s string, start int) (string, int, bool) {
 	if start >= len(s) || s[start] != '"' {
-		return "", false
+		return "", start, false
 	}
 
 	escaped := false
@@ -208,10 +363,14 @@ func parseJSONStringValue(s string, start int) (string, bool) {
 			continue
 		}
 		if ch == '"' {
-			return s[start+1 : i], true
+			unquoted, err := strconv.Unquote(s[start : i+1])
+			if err != nil {
+				return "", start, false
+			}
+			return unquoted, i + 1, true
 		}
 	}
-	return "", false
+	return "", start, false
 }
 
 func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -244,6 +403,10 @@ func (t *thinkingRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	}
 
 	if injectThinkingPayload(payload, t.provider, t.thinking) {
+		rewritten = true
+	}
+
+	if injectStoredReasoningContent(payload, reasoningSessionIDFromContext(req.Context()), t.store) {
 		rewritten = true
 	}
 
@@ -325,6 +488,11 @@ func buildThinkingHTTPClient(config map[string]interface{}, base *http.Client) *
 		tracker = rawTracker
 	}
 
+	var store *reasoningSessionStore
+	if rawStore, ok := config[reasoningStoreConfigKey].(*reasoningSessionStore); ok {
+		store = rawStore
+	}
+
 	cloned := *base
 	transport := base.Transport
 	if transport == nil {
@@ -336,6 +504,7 @@ func buildThinkingHTTPClient(config map[string]interface{}, base *http.Client) *
 		model:    parsed.ModelName,
 		thinking: thinking,
 		tracker:  tracker,
+		store:    store,
 	}
 	return &cloned
 }
@@ -441,6 +610,91 @@ func injectThinkingPayload(payload map[string]interface{}, provider string, thin
 		}
 	}
 	return false
+}
+
+func injectStoredReasoningContent(payload map[string]interface{}, sessionID string, store *reasoningSessionStore) bool {
+	if store == nil || strings.TrimSpace(sessionID) == "" || payload == nil {
+		return false
+	}
+
+	rawMessages, ok := payload["messages"].([]interface{})
+	if !ok || len(rawMessages) == 0 {
+		return false
+	}
+
+	changed := false
+	for _, rawMessage := range rawMessages {
+		message, ok := rawMessage.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		role, _ := message["role"].(string)
+		if strings.TrimSpace(role) != "assistant" {
+			continue
+		}
+		if content, _ := message[reasoningContentExtraKey].(string); strings.TrimSpace(content) != "" {
+			continue
+		}
+
+		rawToolCalls, ok := message["tool_calls"].([]interface{})
+		if !ok || len(rawToolCalls) == 0 {
+			continue
+		}
+
+		toolCallIDs := make([]string, 0, len(rawToolCalls))
+		for _, rawToolCall := range rawToolCalls {
+			toolCall, ok := rawToolCall.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			toolCallID, _ := toolCall["id"].(string)
+			toolCallID = strings.TrimSpace(toolCallID)
+			if toolCallID != "" {
+				toolCallIDs = append(toolCallIDs, toolCallID)
+			}
+		}
+		if len(toolCallIDs) == 0 {
+			continue
+		}
+
+		if content, ok := store.LookupToolCallReasoning(sessionID, toolCallIDs); ok {
+			message[reasoningContentExtraKey] = content
+			changed = true
+		}
+	}
+
+	return changed
+}
+
+func (s *reasoningSessionStore) LookupToolCallReasoning(sessionID string, toolCallIDs []string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || len(toolCallIDs) == 0 {
+		return "", false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entry, ok := s.sessions[sessionID]
+	if !ok || entry == nil {
+		return "", false
+	}
+
+	for _, toolCallID := range toolCallIDs {
+		toolCallID = strings.TrimSpace(toolCallID)
+		if toolCallID == "" {
+			continue
+		}
+		if content, ok := entry.values[toolCallID]; ok && strings.TrimSpace(content) != "" {
+			return content, true
+		}
+	}
+
+	return "", false
 }
 
 func isOneOf(value string, candidates ...string) bool {

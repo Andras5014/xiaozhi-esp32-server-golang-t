@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,7 @@ type EinoLLMProvider struct {
 	config           map[string]interface{}
 	providerType     string // "openai" 或 "ollama"
 	reasoningTracker *reasoningContentTracker
+	reasoningStore   *reasoningSessionStore
 }
 
 // EinoConfig Eino LLM配置
@@ -92,9 +94,12 @@ func getHTTPClient() *http.Client {
 func NewEinoLLMProvider(config map[string]interface{}) (*EinoLLMProvider, error) {
 	//log.Debugf("NewEinoLLMProvider config: %+v", config)
 	var tracker *reasoningContentTracker
+	var store *reasoningSessionStore
 	if enabled, _ := config[reasoningDetectConfigKey].(bool); enabled {
 		tracker = &reasoningContentTracker{}
+		store = newReasoningSessionStore()
 		config[reasoningTrackerConfigKey] = tracker
+		config[reasoningStoreConfigKey] = store
 	}
 	parsedConfig, err := decodeOpenAICompatibleConfig(config)
 	if err != nil {
@@ -147,6 +152,7 @@ func NewEinoLLMProvider(config map[string]interface{}) (*EinoLLMProvider, error)
 		config:           config,
 		providerType:     providerType,
 		reasoningTracker: tracker,
+		reasoningStore:   store,
 	}
 
 	return provider, nil
@@ -294,39 +300,38 @@ func sendLLMError(ch chan *schema.Message, err error) {
 func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID string, messages []*schema.Message, tools []*schema.ToolInfo) chan *schema.Message {
 	responseChan := make(chan *schema.Message, 200)
 
-	var err error
 	go func() {
 		defer close(responseChan)
+		ctx = withReasoningSessionID(ctx, sessionID)
 		if p.reasoningTracker != nil {
 			p.reasoningTracker.Reset()
 		}
 
 		log.Infof("[Eino-LLM] 开始处理Eino工具请求 - SessionID: %s, tools: %+v", sessionID, tools)
 
-		// 如果有工具，需要绑定工具到ChatModel
-		if len(tools) > 0 {
-			p.chatModel, err = p.chatModel.WithTools(tools)
-			if err != nil {
-				log.Errorf("绑定工具失败: %v", err)
-				sendLLMError(responseChan, err)
-				return
-			}
+		chatModel, err := p.requestChatModel(messages, tools)
+		if err != nil {
+			log.Errorf("准备ChatModel失败: %v", err)
+			sendLLMError(responseChan, err)
+			return
 		}
 
 		if p.streamable {
 			log.Debugf("EinoLLMProvider.EinoResponseWithTools() streamable: %t", p.streamable)
 			// 直接使用Eino的Stream方法
-			streamReader, err := p.chatModel.Stream(ctx, messages, p.buildModelCallOptions()...)
+			streamReader, err := chatModel.Stream(ctx, messages, p.buildModelCallOptions()...)
 			if err != nil {
 				log.Errorf("Eino工具流式调用失败: %v", err)
 				// 对于mock实现，如果Stream失败，回退到Generate
-				message, genErr := p.chatModel.Generate(ctx, messages, p.buildModelCallOptions()...)
+				message, genErr := chatModel.Generate(ctx, messages, p.buildModelCallOptions()...)
 				if genErr != nil {
 					log.Errorf("Eino工具生成响应失败: %v", genErr)
 					sendLLMError(responseChan, genErr)
 					return
 				}
 				if message != nil {
+					message = p.attachReasoningContent(message)
+					p.storeReasoningContent(sessionID, message.ToolCalls)
 					responseChan <- message
 				}
 				return
@@ -336,6 +341,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 				defer streamReader.Close()
 
 				var currentToolCall *schema.ToolCall
+				completedToolCalls := make([]schema.ToolCall, 0, 1)
 				var toolCallBuffer string
 				var isToolCallComplete bool
 				var streamChunkCount int
@@ -355,8 +361,11 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 								Role:      schema.Assistant,
 								ToolCalls: []schema.ToolCall{*currentToolCall},
 							}
+							completeMessage = p.attachReasoningContent(completeMessage)
 							responseChan <- completeMessage
+							completedToolCalls = append(completedToolCalls, completeMessage.ToolCalls...)
 						}
+						p.storeReasoningContent(sessionID, completedToolCalls)
 						break
 					}
 					if err != nil {
@@ -401,7 +410,9 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 									Role:      schema.Assistant,
 									ToolCalls: []schema.ToolCall{*currentToolCall},
 								}
+								completeMessage = p.attachReasoningContent(completeMessage)
 								responseChan <- completeMessage
+								completedToolCalls = append(completedToolCalls, completeMessage.ToolCalls...)
 
 								// 重置状态
 								currentToolCall = nil
@@ -411,6 +422,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 						} else if message.Content != "" {
 							// 发送非工具调用的普通消息
 							message.ToolCalls = nil
+							message = p.attachReasoningContent(message)
 							responseChan <- message
 						}
 					}
@@ -420,7 +432,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 			}
 		} else {
 			// 直接使用Eino的Generate方法
-			message, err := p.chatModel.Generate(ctx, messages, p.buildModelCallOptions()...)
+			message, err := chatModel.Generate(ctx, messages, p.buildModelCallOptions()...)
 			if err != nil {
 				log.Errorf("Eino工具生成响应失败: %v", err)
 				sendLLMError(responseChan, err)
@@ -428,6 +440,8 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 			}
 
 			if message != nil {
+				message = p.attachReasoningContent(message)
+				p.storeReasoningContent(sessionID, message.ToolCalls)
 				responseChan <- message
 			}
 		}
@@ -436,6 +450,107 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 	}()
 
 	return responseChan
+}
+
+func (p *EinoLLMProvider) attachReasoningContent(message *schema.Message) *schema.Message {
+	if message == nil || p == nil || p.reasoningTracker == nil {
+		return message
+	}
+
+	content := strings.TrimSpace(p.reasoningTracker.Content())
+	if content == "" {
+		return message
+	}
+
+	if message.Extra == nil {
+		message.Extra = make(map[string]any, 1)
+	}
+	message.Extra[reasoningContentExtraKey] = content
+	return message
+}
+
+func (p *EinoLLMProvider) storeReasoningContent(sessionID string, toolCalls []schema.ToolCall) {
+	if p == nil || p.reasoningStore == nil || p.reasoningTracker == nil {
+		return
+	}
+
+	content := strings.TrimSpace(p.reasoningTracker.Content())
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || content == "" || len(toolCalls) == 0 {
+		return
+	}
+
+	toolCallIDs := make([]string, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		toolCallID := strings.TrimSpace(toolCall.ID)
+		if toolCallID != "" {
+			toolCallIDs = append(toolCallIDs, toolCallID)
+		}
+	}
+	if len(toolCallIDs) == 0 {
+		return
+	}
+
+	p.reasoningStore.StoreToolCallReasoning(sessionID, toolCallIDs, content)
+}
+
+func (p *EinoLLMProvider) requestChatModel(messages []*schema.Message, tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	if p == nil || p.chatModel == nil {
+		return nil, errors.New("chat model is nil")
+	}
+
+	chatModel := p.chatModel
+	if len(tools) == 0 {
+		return chatModel, nil
+	}
+
+	if p.shouldOmitToolsOnFollowup(messages, tools) {
+		log.Infof("检测到讯飞 OpenAI 兼容 follow-up 轮次，跳过 tools 绑定以避免 Bad Request")
+		return chatModel, nil
+	}
+
+	return chatModel.WithTools(tools)
+}
+
+func (p *EinoLLMProvider) shouldOmitToolsOnFollowup(messages []*schema.Message, tools []*schema.ToolInfo) bool {
+	if len(tools) == 0 || !hasToolResultMessage(messages) {
+		return false
+	}
+
+	return p.isXunfeiOpenAICompatTarget()
+}
+
+func hasToolResultMessage(messages []*schema.Message) bool {
+	for _, msg := range messages {
+		if msg != nil && msg.Role == schema.Tool {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *EinoLLMProvider) isXunfeiOpenAICompatTarget() bool {
+	if p == nil {
+		return false
+	}
+
+	provider := strings.ToLower(strings.TrimSpace(getConfigString(p.config, "provider")))
+	if provider == "xunfei" {
+		return true
+	}
+
+	baseURL := strings.ToLower(strings.TrimSpace(getConfigString(p.config, "base_url")))
+	return strings.Contains(baseURL, "xf-yun.com")
+}
+
+func getConfigString(config map[string]interface{}, key string) string {
+	if len(config) == 0 {
+		return ""
+	}
+	if value, ok := config[key].(string); ok {
+		return value
+	}
+	return ""
 }
 
 func (p *EinoLLMProvider) buildModelCallOptions() []model.Option {
