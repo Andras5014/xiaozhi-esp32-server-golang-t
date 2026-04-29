@@ -2,6 +2,7 @@ package eino_llm
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -309,7 +310,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 
 		log.Infof("[Eino-LLM] 开始处理Eino工具请求 - SessionID: %s, tools: %+v", sessionID, tools)
 
-		chatModel, err := p.requestChatModel(messages, tools)
+		chatModel, toolNameAliases, err := p.requestChatModel(messages, tools)
 		if err != nil {
 			log.Errorf("准备ChatModel失败: %v", err)
 			sendLLMError(responseChan, err)
@@ -330,6 +331,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 					return
 				}
 				if message != nil {
+					message = restoreOriginalToolCallNames(message, toolNameAliases)
 					message = p.attachReasoningContent(message)
 					p.storeReasoningContent(sessionID, message.ToolCalls)
 					responseChan <- message
@@ -383,6 +385,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 					}
 
 					if message != nil {
+						message = restoreOriginalToolCallNames(message, toolNameAliases)
 						streamChunkCount++
 						// 检查是否是工具调用的开始
 						if len(message.ToolCalls) > 0 {
@@ -440,6 +443,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 			}
 
 			if message != nil {
+				message = restoreOriginalToolCallNames(message, toolNameAliases)
 				message = p.attachReasoningContent(message)
 				p.storeReasoningContent(sessionID, message.ToolCalls)
 				responseChan <- message
@@ -494,22 +498,185 @@ func (p *EinoLLMProvider) storeReasoningContent(sessionID string, toolCalls []sc
 	p.reasoningStore.StoreToolCallReasoning(sessionID, toolCallIDs, content)
 }
 
-func (p *EinoLLMProvider) requestChatModel(messages []*schema.Message, tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+func (p *EinoLLMProvider) requestChatModel(messages []*schema.Message, tools []*schema.ToolInfo) (model.ToolCallingChatModel, map[string]string, error) {
 	if p == nil || p.chatModel == nil {
-		return nil, errors.New("chat model is nil")
+		return nil, nil, errors.New("chat model is nil")
 	}
 
 	chatModel := p.chatModel
 	if len(tools) == 0 {
-		return chatModel, nil
+		return chatModel, nil, nil
 	}
 
 	if p.shouldOmitToolsOnFollowup(messages, tools) {
 		log.Infof("检测到讯飞 OpenAI 兼容 follow-up 轮次，跳过 tools 绑定以避免 Bad Request")
-		return chatModel, nil
+		return chatModel, nil, nil
 	}
 
-	return chatModel.WithTools(tools)
+	boundTools, toolNameAliases := p.prepareToolsForBinding(tools)
+	boundModel, err := chatModel.WithTools(boundTools)
+	if err != nil {
+		return nil, nil, err
+	}
+	return boundModel, toolNameAliases, nil
+}
+
+func (p *EinoLLMProvider) prepareToolsForBinding(tools []*schema.ToolInfo) ([]*schema.ToolInfo, map[string]string) {
+	if len(tools) == 0 || p == nil || !p.requiresOpenAICompatibleToolNames() {
+		return tools, nil
+	}
+
+	prepared := make([]*schema.ToolInfo, 0, len(tools))
+	usedAliases := make(map[string]string, len(tools))
+	aliasToOriginal := make(map[string]string)
+	rewrittenCount := 0
+
+	for _, toolInfo := range tools {
+		if toolInfo == nil {
+			prepared = append(prepared, nil)
+			continue
+		}
+
+		originalName := strings.TrimSpace(toolInfo.Name)
+		alias := originalName
+		if !isOpenAICompatibleToolName(alias) {
+			alias = sanitizeOpenAIToolNameCandidate(alias)
+		}
+		alias = ensureUniqueToolAlias(alias, originalName, usedAliases)
+
+		if alias != originalName {
+			cloned := *toolInfo
+			cloned.Name = alias
+			prepared = append(prepared, &cloned)
+			aliasToOriginal[alias] = originalName
+			rewrittenCount++
+			continue
+		}
+
+		prepared = append(prepared, toolInfo)
+	}
+
+	if rewrittenCount > 0 {
+		log.Infof("为兼容 OpenAI 工具名约束，已重写 %d 个工具名", rewrittenCount)
+	}
+	if len(aliasToOriginal) == 0 {
+		return tools, nil
+	}
+	return prepared, aliasToOriginal
+}
+
+func (p *EinoLLMProvider) requiresOpenAICompatibleToolNames() bool {
+	return p != nil && strings.EqualFold(strings.TrimSpace(p.providerType), "openai")
+}
+
+func restoreOriginalToolCallNames(message *schema.Message, aliasToOriginal map[string]string) *schema.Message {
+	if message == nil || len(aliasToOriginal) == 0 || len(message.ToolCalls) == 0 {
+		return message
+	}
+
+	changed := false
+	toolCalls := make([]schema.ToolCall, len(message.ToolCalls))
+	for i, toolCall := range message.ToolCalls {
+		toolCalls[i] = toolCall
+		alias := strings.TrimSpace(toolCall.Function.Name)
+		originalName, ok := aliasToOriginal[alias]
+		if !ok || originalName == alias {
+			continue
+		}
+
+		toolCalls[i].Function.Name = originalName
+		changed = true
+	}
+
+	if !changed {
+		return message
+	}
+
+	cloned := *message
+	cloned.ToolCalls = toolCalls
+	return &cloned
+}
+
+func isOpenAICompatibleToolName(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+
+	for _, r := range name {
+		if !isOpenAICompatibleToolNameRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isOpenAICompatibleToolNameRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z':
+		return true
+	case r >= 'A' && r <= 'Z':
+		return true
+	case r >= '0' && r <= '9':
+		return true
+	case r == '_' || r == '-':
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeOpenAIToolNameCandidate(name string) string {
+	var builder strings.Builder
+	builder.Grow(len(name))
+
+	lastWasUnderscore := false
+	for _, r := range name {
+		if isOpenAICompatibleToolNameRune(r) {
+			builder.WriteRune(r)
+			lastWasUnderscore = false
+			continue
+		}
+		if lastWasUnderscore {
+			continue
+		}
+		builder.WriteByte('_')
+		lastWasUnderscore = true
+	}
+
+	sanitized := strings.Trim(builder.String(), "_-")
+	if sanitized == "" {
+		return "tool"
+	}
+	return sanitized
+}
+
+func ensureUniqueToolAlias(alias string, originalName string, usedAliases map[string]string) string {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		alias = "tool"
+	}
+
+	if usedBy, exists := usedAliases[alias]; !exists || usedBy == originalName {
+		usedAliases[alias] = originalName
+		return alias
+	}
+
+	digest := sha1.Sum([]byte(originalName))
+	for prefixLen := 4; prefixLen <= len(digest); prefixLen += 2 {
+		candidate := fmt.Sprintf("%s_%x", alias, digest[:prefixLen])
+		if usedBy, exists := usedAliases[candidate]; !exists || usedBy == originalName {
+			usedAliases[candidate] = originalName
+			return candidate
+		}
+	}
+
+	for counter := 1; ; counter++ {
+		candidate := fmt.Sprintf("%s_%d", alias, counter)
+		if usedBy, exists := usedAliases[candidate]; !exists || usedBy == originalName {
+			usedAliases[candidate] = originalName
+			return candidate
+		}
+	}
 }
 
 func (p *EinoLLMProvider) shouldOmitToolsOnFollowup(messages []*schema.Message, tools []*schema.ToolInfo) bool {

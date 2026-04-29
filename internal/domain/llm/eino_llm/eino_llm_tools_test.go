@@ -3,6 +3,7 @@ package eino_llm
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/cloudwego/eino/components/model"
@@ -15,6 +16,8 @@ type stubToolCallingChatModel struct {
 	generateErr    error
 	withToolsResp  model.ToolCallingChatModel
 	withToolsErr   error
+	withToolsFunc  func([]*schema.ToolInfo) (model.ToolCallingChatModel, error)
+	capturedTools  []*schema.ToolInfo
 	generateCalls  int
 	withToolsCalls int
 }
@@ -28,8 +31,12 @@ func (s *stubToolCallingChatModel) Stream(context.Context, []*schema.Message, ..
 	return nil, errors.New("stream not implemented in stub")
 }
 
-func (s *stubToolCallingChatModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+func (s *stubToolCallingChatModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
 	s.withToolsCalls++
+	s.capturedTools = cloneToolInfos(tools)
+	if s.withToolsFunc != nil {
+		return s.withToolsFunc(tools)
+	}
 	if s.withToolsResp != nil || s.withToolsErr != nil {
 		return s.withToolsResp, s.withToolsErr
 	}
@@ -109,6 +116,62 @@ func TestEinoResponseWithTools_OmitsToolsOnXunfeiFollowup(t *testing.T) {
 	require.Equal(t, 0, baseModel.withToolsCalls)
 	require.Equal(t, 1, baseModel.generateCalls)
 	require.Equal(t, 0, boundModel.generateCalls)
+}
+
+func TestEinoResponseWithTools_RewritesOpenAIToolNamesRoundTrip(t *testing.T) {
+	baseModel := &stubToolCallingChatModel{}
+	baseModel.withToolsFunc = func(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+		require.Len(t, tools, 2)
+		require.Equal(t, "self_bazi_get_bazi_detail", tools[0].Name)
+		require.NotEqual(t, tools[0].Name, tools[1].Name)
+		require.True(t, strings.HasPrefix(tools[1].Name, "self_bazi_get_bazi_detail_"))
+
+		return &stubToolCallingChatModel{
+			generateResp: schema.AssistantMessage("", []schema.ToolCall{{
+				ID:   "call_1",
+				Type: "function",
+				Function: schema.FunctionCall{
+					Name:      tools[0].Name,
+					Arguments: `{"question":"test"}`,
+				},
+			}}),
+		}, nil
+	}
+
+	provider := &EinoLLMProvider{
+		chatModel:    baseModel,
+		maxTokens:    128,
+		streamable:   false,
+		config:       map[string]interface{}{"provider": "openai"},
+		providerType: "openai",
+	}
+
+	tools := []*schema.ToolInfo{
+		{Name: "self.bazi.get_bazi_detail", ParamsOneOf: &schema.ParamsOneOf{}},
+		{Name: "self_bazi_get_bazi_detail", ParamsOneOf: &schema.ParamsOneOf{}},
+	}
+
+	responses := collectProviderResponses(provider.ResponseWithContext(context.Background(), "openai-tool-alias", []*schema.Message{schema.UserMessage("hi")}, tools))
+
+	require.Len(t, responses, 1)
+	require.Len(t, responses[0].ToolCalls, 1)
+	require.Equal(t, "self.bazi.get_bazi_detail", responses[0].ToolCalls[0].Function.Name)
+}
+
+func cloneToolInfos(tools []*schema.ToolInfo) []*schema.ToolInfo {
+	if len(tools) == 0 {
+		return nil
+	}
+
+	cloned := make([]*schema.ToolInfo, len(tools))
+	for i, toolInfo := range tools {
+		if toolInfo == nil {
+			continue
+		}
+		copy := *toolInfo
+		cloned[i] = &copy
+	}
+	return cloned
 }
 
 func collectProviderResponses(ch chan *schema.Message) []*schema.Message {
