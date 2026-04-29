@@ -138,6 +138,45 @@ func TestGetMessagesIgnoresToolRoundMessagesOutsideNoneMode(t *testing.T) {
 	}
 }
 
+func TestGetMessagesDropsIncompleteToolCallHistory(t *testing.T) {
+	manager := newTestLLMManager(data_client.MemoryModeShort)
+	manager.clientState.AddMessage(schema.UserMessage("帮我安排今天的行程"))
+	manager.clientState.AddMessage(schema.AssistantMessage("", []schema.ToolCall{
+		{
+			ID:   "call_calendar_1",
+			Type: "function",
+			Function: schema.FunctionCall{
+				Name:      "self_calendar_get_events",
+				Arguments: `{"date":"2026-04-29"}`,
+			},
+		},
+		{
+			ID:   "call_weather_1",
+			Type: "function",
+			Function: schema.FunctionCall{
+				Name:      "self_weather_get_forecast",
+				Arguments: `{"city":"Shanghai"}`,
+			},
+		},
+	}))
+	manager.clientState.AddMessage(schema.ToolMessage(`{"events":[]}`, "call_calendar_1"))
+	manager.clientState.AddMessage(schema.AssistantMessage("今天上午没有安排。", nil))
+
+	messages := manager.GetMessages(context.Background(), schema.UserMessage("继续"), 10, nil)
+	if len(messages) != 4 {
+		t.Fatalf("expected system + sanitized 3 messages, got %d", len(messages))
+	}
+	if messages[1].Role != schema.User || messages[1].Content != "帮我安排今天的行程" {
+		t.Fatalf("expected original user message to remain, got %+v", messages[1])
+	}
+	if messages[2].Role != schema.Assistant || messages[2].Content != "今天上午没有安排。" {
+		t.Fatalf("expected incomplete tool-call assistant segment to be removed, got %+v", messages[2])
+	}
+	if messages[3].Role != schema.User || messages[3].Content != "继续" {
+		t.Fatalf("expected current user message to be appended, got %+v", messages[3])
+	}
+}
+
 func TestTTSTurnTrackerWaitBlocksUntilAllDone(t *testing.T) {
 	tracker := newTTSTurnTracker()
 	done1 := tracker.Add()

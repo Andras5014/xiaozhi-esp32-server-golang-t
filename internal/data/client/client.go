@@ -249,62 +249,84 @@ func AlignMessage(messages []*schema.Message) []*schema.Message {
 }
 */
 // AlignToolMessages 保证 role:tool 消息中的 tool_call_id 与 role:assistant 消息中的 tool_calls 的 id 对应
-// 如果不匹配则删除对应的 tool 消息，同时处理反向不匹配的场景
+// 并保证 assistant(tool_calls) 后面紧跟完整的 tool 结果链。
+// 不完整或顺序非法的工具调用片段会被整体丢弃，避免 OpenAI/DeepSeek 兼容接口返回 400。
 func AlignToolMessages(messages []*schema.Message) []*schema.Message {
 	if len(messages) == 0 {
 		return messages
 	}
 
-	// 收集所有 assistant 消息中的 tool_calls id
-	validToolCallIDs := make(map[string]bool)
-	// 收集所有 tool 消息中的 tool_call_id
-	usedToolCallIDs := make(map[string]bool)
-
-	// 第一遍遍历：收集 assistant 消息中的 tool_calls id 和 tool 消息中的 tool_call_id
-	for _, msg := range messages {
+	alignedMessages := make([]*schema.Message, 0, len(messages))
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
 		if msg == nil {
 			continue
 		}
 
-		if msg.Role == schema.Assistant && len(msg.ToolCalls) > 0 {
-			for _, toolCall := range msg.ToolCalls {
-				if toolCall.ID != "" {
-					validToolCallIDs[toolCall.ID] = true
-				}
-			}
-		}
-
-		if msg.Role == schema.Tool && msg.ToolCallID != "" {
-			usedToolCallIDs[msg.ToolCallID] = true
-		}
-	}
-
-	// 过滤消息，处理双向不匹配的情况
-	var alignedMessages []*schema.Message
-	for _, msg := range messages {
-		if msg == nil {
-			continue
-		}
-
-		// 如果是 tool 消息，检查 tool_call_id 是否有效
 		if msg.Role == schema.Tool {
-			if msg.ToolCallID != "" && validToolCallIDs[msg.ToolCallID] {
-				alignedMessages = append(alignedMessages, msg)
-			}
-		} else if msg.Role == schema.Assistant && len(msg.ToolCalls) > 0 {
-			// 处理 assistant 消息，检查是否有未使用的 tool_calls
-			for _, toolCall := range msg.ToolCalls {
-				if toolCall.ID != "" {
-					if usedToolCallIDs[toolCall.ID] {
-						alignedMessages = append(alignedMessages, msg)
-					} else {
-						continue
-					}
-				}
-			}
-		} else {
-			// 其他类型的消息直接保留
+			log.Warnf("丢弃孤立的 tool 消息: tool_call_id=%s", msg.ToolCallID)
+			continue
+		}
+
+		if msg.Role != schema.Assistant || len(msg.ToolCalls) == 0 {
 			alignedMessages = append(alignedMessages, msg)
+			continue
+		}
+
+		pendingToolCallIDs := make(map[string]struct{}, len(msg.ToolCalls))
+		invalidToolCallID := false
+		for _, toolCall := range msg.ToolCalls {
+			toolCallID := strings.TrimSpace(toolCall.ID)
+			if toolCallID == "" {
+				invalidToolCallID = true
+				break
+			}
+			pendingToolCallIDs[toolCallID] = struct{}{}
+		}
+
+		if invalidToolCallID || len(pendingToolCallIDs) == 0 {
+			log.Warnf("丢弃缺少 tool_call_id 的 assistant 工具调用消息")
+			continue
+		}
+
+		matchedToolMessages := make([]*schema.Message, 0, len(pendingToolCallIDs))
+		nextIndex := i + 1
+		for ; nextIndex < len(messages); nextIndex++ {
+			nextMsg := messages[nextIndex]
+			if nextMsg == nil {
+				continue
+			}
+			if nextMsg.Role != schema.Tool {
+				break
+			}
+
+			toolCallID := strings.TrimSpace(nextMsg.ToolCallID)
+			if _, ok := pendingToolCallIDs[toolCallID]; !ok {
+				break
+			}
+
+			matchedToolMessages = append(matchedToolMessages, nextMsg)
+			delete(pendingToolCallIDs, toolCallID)
+			if len(pendingToolCallIDs) == 0 {
+				break
+			}
+		}
+
+		if len(pendingToolCallIDs) == 0 {
+			alignedMessages = append(alignedMessages, msg)
+			alignedMessages = append(alignedMessages, matchedToolMessages...)
+			i = nextIndex
+			continue
+		}
+
+		log.Warnf(
+			"丢弃不完整的 assistant 工具调用片段: tool_calls=%d matched_tools=%d pending_tools=%d",
+			len(msg.ToolCalls),
+			len(matchedToolMessages),
+			len(pendingToolCallIDs),
+		)
+		if len(matchedToolMessages) > 0 {
+			i = nextIndex - 1
 		}
 	}
 

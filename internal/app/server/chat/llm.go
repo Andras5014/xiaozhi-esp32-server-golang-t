@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	. "xiaozhi-esp32-server-golang/internal/data/client"
@@ -52,6 +53,8 @@ const (
 	interruptStageExtraKey = "interrupt_stage"
 	interruptContentSuffix = " [用户打断]"
 )
+
+var historyMessageSeq atomic.Uint64
 
 // GetLastMessageID 获取最近保存的消息的 MessageID（用于两阶段保存）
 func (l *LLMManager) GetLastMessageID(role string) (string, bool) {
@@ -1086,21 +1089,15 @@ func (l *LLMManager) AddMessage(ctx context.Context, msg *schema.Message) error 
 		return fmt.Errorf("消息不能为 nil")
 	}
 
-	// 生成 MessageID（使用 MD5 哈希缩短长度，避免超过数据库 varchar(64) 限制）
-	// 原始格式：{SessionID}-{Role}-{Timestamp}
-	rawMessageID := fmt.Sprintf("%s-%s-%d",
-		l.clientState.SessionID,
-		msg.Role,
-		time.Now().UnixMilli())
-	// 使用 MD5 哈希生成固定32字符的十六进制字符串
-	hash := md5.Sum([]byte(rawMessageID))
-	messageID := hex.EncodeToString(hash[:])
+	timestamp := time.Now()
+	messageID := buildHistoryMessageID(l.clientState.SessionID, msg, timestamp)
 
 	// 同步添加到内存中
 	l.clientState.AddMessage(msg)
 
 	// Tool 角色消息：直接保存，不涉及两阶段保存（无音频）
 	if msg.Role == schema.Tool {
+		log.Infof("保存Tool消息: session=%s message_id=%s tool_call_id=%s content_len=%d", l.clientState.SessionID, messageID, msg.ToolCallID, len(msg.Content))
 		eventbus.Get().Publish(eventbus.TopicAddMessage, &eventbus.AddMessageEvent{
 			ClientState: l.clientState,
 			Msg:         *msg,
@@ -1109,7 +1106,7 @@ func (l *LLMManager) AddMessage(ctx context.Context, msg *schema.Message) error 
 			AudioSize:   0,
 			SampleRate:  0,
 			Channels:    0,
-			Timestamp:   time.Now(),
+			Timestamp:   timestamp,
 			IsUpdate:    false, // 一次性保存
 		})
 		return nil
@@ -1132,7 +1129,7 @@ func (l *LLMManager) AddMessage(ctx context.Context, msg *schema.Message) error 
 		AudioSize:   0,
 		SampleRate:  0,
 		Channels:    0,
-		Timestamp:   time.Now(),
+		Timestamp:   timestamp,
 		IsUpdate:    false, // 新增消息
 	})
 
@@ -1142,6 +1139,37 @@ func (l *LLMManager) AddMessage(ctx context.Context, msg *schema.Message) error 
 // AddLlmMessage 保持向后兼容，委托给 AddMessage
 func (l *LLMManager) AddLlmMessage(ctx context.Context, msg *schema.Message) error {
 	return l.AddMessage(ctx, msg)
+}
+
+func buildHistoryMessageID(sessionID string, msg *schema.Message, ts time.Time) string {
+	if msg == nil {
+		msg = &schema.Message{}
+	}
+
+	seq := historyMessageSeq.Add(1)
+	rawMessageID := fmt.Sprintf(
+		"%s-%s-%d-%d-%s-%s",
+		sessionID,
+		msg.Role,
+		ts.UnixNano(),
+		seq,
+		strings.TrimSpace(msg.ToolCallID),
+		summarizeToolCallIDs(msg.ToolCalls),
+	)
+	hash := md5.Sum([]byte(rawMessageID))
+	return hex.EncodeToString(hash[:])
+}
+
+func summarizeToolCallIDs(toolCalls []schema.ToolCall) string {
+	if len(toolCalls) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		parts = append(parts, strings.TrimSpace(toolCall.ID))
+	}
+	return strings.Join(parts, ",")
 }
 
 func (l *LLMManager) GetMessages(ctx context.Context, userMessage *schema.Message, count int, speakerResult *speaker.IdentifyResult) []*schema.Message {
@@ -1241,7 +1269,70 @@ func (l *LLMManager) GetMessages(ctx context.Context, userMessage *schema.Messag
 			retMessage = append(retMessage, userMessage)
 		}
 	}
-	return retMessage
+	if len(retMessage) <= 1 {
+		return retMessage
+	}
+
+	sanitizedMessages := AlignToolMessages(retMessage[1:])
+	if len(sanitizedMessages) != len(retMessage)-1 {
+		log.Warnf(
+			"LLM请求前清洗了不完整工具消息链: session=%s before=%d after=%d before_summary=%s after_summary=%s",
+			l.clientState.SessionID,
+			len(retMessage)-1,
+			len(sanitizedMessages),
+			summarizeChatMessagesForLog(retMessage[1:]),
+			summarizeChatMessagesForLog(sanitizedMessages),
+		)
+	}
+	return append([]*schema.Message{retMessage[0]}, sanitizedMessages...)
+}
+
+func summarizeChatMessagesForLog(messages []*schema.Message) string {
+	if len(messages) == 0 {
+		return "<empty>"
+	}
+
+	const maxMessages = 12
+	start := 0
+	if len(messages) > maxMessages {
+		start = len(messages) - maxMessages
+	}
+
+	parts := make([]string, 0, len(messages)-start)
+	for idx := start; idx < len(messages); idx++ {
+		msg := messages[idx]
+		if msg == nil {
+			parts = append(parts, fmt.Sprintf("#%d:<nil>", idx))
+			continue
+		}
+
+		part := fmt.Sprintf("#%d:%s(len=%d", idx, msg.Role, len(msg.Content))
+		if len(msg.ToolCalls) > 0 {
+			part += fmt.Sprintf(",tool_calls=%s", summarizeToolCallsForLog(msg.ToolCalls))
+		}
+		if msg.ToolCallID != "" {
+			part += fmt.Sprintf(",tool_call_id=%s", msg.ToolCallID)
+		}
+		part += ")"
+		parts = append(parts, part)
+	}
+
+	if start > 0 {
+		return fmt.Sprintf("... %s", strings.Join(parts, " | "))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func summarizeToolCallsForLog(toolCalls []schema.ToolCall) string {
+	if len(toolCalls) == 0 {
+		return "[]"
+	}
+
+	parts := make([]string, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		parts = append(parts, fmt.Sprintf("%s:%s", strings.TrimSpace(toolCall.ID), strings.TrimSpace(toolCall.Function.Name)))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
 }
 
 func buildKnowledgeSearchRoutingPolicy(knowledgeBases []config_types.KnowledgeBaseRef) string {

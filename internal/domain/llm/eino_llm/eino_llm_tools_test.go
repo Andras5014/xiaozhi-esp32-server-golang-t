@@ -158,6 +158,38 @@ func TestEinoResponseWithTools_RewritesOpenAIToolNamesRoundTrip(t *testing.T) {
 	require.Equal(t, "self.bazi.get_bazi_detail", responses[0].ToolCalls[0].Function.Name)
 }
 
+func TestDetectToolMessageSequenceIssuesFlagsMissingToolResponse(t *testing.T) {
+	messages := []*schema.Message{
+		schema.SystemMessage("你是一个中文助手。"),
+		schema.UserMessage("帮我查一下桥梁长度"),
+		schema.AssistantMessage("", []schema.ToolCall{
+			{
+				ID:   "call_1",
+				Type: "function",
+				Function: schema.FunctionCall{
+					Name:      "execute",
+					Arguments: `{"api_name":"CountQuery"}`,
+				},
+			},
+			{
+				ID:   "call_2",
+				Type: "function",
+				Function: schema.FunctionCall{
+					Name:      "execute",
+					Arguments: `{"api_name":"CountQuery"}`,
+				},
+			},
+		}),
+		schema.ToolMessage(`{"ok":true}`, "call_1"),
+		schema.AssistantMessage("继续补充说明", nil),
+	}
+
+	issues := detectToolMessageSequenceIssues(messages)
+
+	require.NotEmpty(t, issues)
+	require.True(t, strings.Contains(strings.Join(issues, " | "), "missing 1 tool responses"))
+}
+
 func cloneToolInfos(tools []*schema.ToolInfo) []*schema.ToolInfo {
 	if len(tools) == 0 {
 		return nil

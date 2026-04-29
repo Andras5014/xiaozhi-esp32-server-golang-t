@@ -89,6 +89,16 @@ func (c *ChatHistoryController) SaveMessage(ctx *gin.Context) {
 	var existingMessage models.ChatMessage
 	err := c.DB.Where("message_id = ?", req.MessageID).First(&existingMessage).Error
 	if err == nil {
+		log.Printf(
+			"history duplicate message_id detected: message_id=%s role=%s existing_role=%s incoming_tool_call_id=%s existing_tool_call_id=%s incoming_content_len=%d existing_content_len=%d",
+			req.MessageID,
+			req.Role,
+			existingMessage.Role,
+			req.ToolCallID,
+			existingMessage.ToolCallID,
+			len(req.Content),
+			len(existingMessage.Content),
+		)
 		// 消息已存在，更新音频数据（如果提供了）
 		if req.AudioData != "" {
 			audioPath, err := c.saveAudioFile(req.MessageID, req.AudioData)

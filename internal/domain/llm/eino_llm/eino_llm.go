@@ -309,10 +309,12 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 		}
 
 		log.Infof("[Eino-LLM] 开始处理Eino工具请求 - SessionID: %s, tools: %+v", sessionID, tools)
+		logToolRequestDiagnostics(sessionID, messages, nil)
 
 		chatModel, toolNameAliases, err := p.requestChatModel(messages, tools)
 		if err != nil {
 			log.Errorf("准备ChatModel失败: %v", err)
+			logToolRequestDiagnostics(sessionID, messages, err)
 			sendLLMError(responseChan, err)
 			return
 		}
@@ -323,10 +325,12 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 			streamReader, err := chatModel.Stream(ctx, messages, p.buildModelCallOptions()...)
 			if err != nil {
 				log.Errorf("Eino工具流式调用失败: %v", err)
+				logToolRequestDiagnostics(sessionID, messages, err)
 				// 对于mock实现，如果Stream失败，回退到Generate
 				message, genErr := chatModel.Generate(ctx, messages, p.buildModelCallOptions()...)
 				if genErr != nil {
 					log.Errorf("Eino工具生成响应失败: %v", genErr)
+					logToolRequestDiagnostics(sessionID, messages, genErr)
 					sendLLMError(responseChan, genErr)
 					return
 				}
@@ -438,6 +442,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 			message, err := chatModel.Generate(ctx, messages, p.buildModelCallOptions()...)
 			if err != nil {
 				log.Errorf("Eino工具生成响应失败: %v", err)
+				logToolRequestDiagnostics(sessionID, messages, err)
 				sendLLMError(responseChan, err)
 				return
 			}
@@ -519,6 +524,152 @@ func (p *EinoLLMProvider) requestChatModel(messages []*schema.Message, tools []*
 		return nil, nil, err
 	}
 	return boundModel, toolNameAliases, nil
+}
+
+func logToolRequestDiagnostics(sessionID string, messages []*schema.Message, requestErr error) {
+	issues := detectToolMessageSequenceIssues(messages)
+	if requestErr == nil && len(issues) == 0 {
+		return
+	}
+
+	summary := summarizeMessagesForToolRequest(messages)
+	if requestErr != nil {
+		log.Errorf("[Eino-LLM] 工具请求消息诊断 - SessionID: %s, err: %v, issues: %s, summary: %s", sessionID, requestErr, strings.Join(issues, " | "), summary)
+		return
+	}
+
+	log.Warnf("[Eino-LLM] 发送前检测到工具消息链异常 - SessionID: %s, issues: %s, summary: %s", sessionID, strings.Join(issues, " | "), summary)
+}
+
+func summarizeMessagesForToolRequest(messages []*schema.Message) string {
+	if len(messages) == 0 {
+		return "<empty>"
+	}
+
+	const maxMessages = 16
+	start := 0
+	if len(messages) > maxMessages {
+		start = len(messages) - maxMessages
+	}
+
+	parts := make([]string, 0, len(messages)-start)
+	for i := start; i < len(messages); i++ {
+		msg := messages[i]
+		if msg == nil {
+			parts = append(parts, fmt.Sprintf("#%d:<nil>", i))
+			continue
+		}
+
+		part := fmt.Sprintf("#%d:%s(len=%d", i, msg.Role, len(msg.Content))
+		if len(msg.ToolCalls) > 0 {
+			part += fmt.Sprintf(",tool_calls=%s", summarizeToolCallsForRequest(msg.ToolCalls))
+		}
+		if msg.ToolCallID != "" {
+			part += fmt.Sprintf(",tool_call_id=%s", strings.TrimSpace(msg.ToolCallID))
+		}
+		part += fmt.Sprintf(",snippet=%q)", summarizeContentSnippet(msg.Content, 24))
+		parts = append(parts, part)
+	}
+
+	if start > 0 {
+		return fmt.Sprintf("... %s", strings.Join(parts, " | "))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func summarizeToolCallsForRequest(toolCalls []schema.ToolCall) string {
+	if len(toolCalls) == 0 {
+		return "[]"
+	}
+
+	parts := make([]string, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		parts = append(parts, fmt.Sprintf("%s:%s", strings.TrimSpace(toolCall.ID), strings.TrimSpace(toolCall.Function.Name)))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func summarizeContentSnippet(content string, maxLen int) string {
+	content = strings.TrimSpace(content)
+	content = strings.ReplaceAll(content, "\n", " ")
+	content = strings.ReplaceAll(content, "\r", " ")
+	content = strings.ReplaceAll(content, "\t", " ")
+	if maxLen <= 0 || len(content) <= maxLen {
+		return content
+	}
+	return content[:maxLen] + "..."
+}
+
+func detectToolMessageSequenceIssues(messages []*schema.Message) []string {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	issues := make([]string, 0)
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		if msg == nil {
+			continue
+		}
+
+		if msg.Role == schema.Tool {
+			issues = append(issues, fmt.Sprintf("orphan tool message at #%d tool_call_id=%s", i, strings.TrimSpace(msg.ToolCallID)))
+			continue
+		}
+
+		if msg.Role != schema.Assistant || len(msg.ToolCalls) == 0 {
+			continue
+		}
+
+		pendingToolCallIDs := make(map[string]struct{}, len(msg.ToolCalls))
+		invalidToolCallID := false
+		for _, toolCall := range msg.ToolCalls {
+			toolCallID := strings.TrimSpace(toolCall.ID)
+			if toolCallID == "" {
+				invalidToolCallID = true
+				break
+			}
+			pendingToolCallIDs[toolCallID] = struct{}{}
+		}
+		if invalidToolCallID || len(pendingToolCallIDs) == 0 {
+			issues = append(issues, fmt.Sprintf("assistant tool_calls at #%d contains empty tool_call_id", i))
+			continue
+		}
+
+		matchedTools := 0
+		nextIndex := i + 1
+		for ; nextIndex < len(messages); nextIndex++ {
+			nextMsg := messages[nextIndex]
+			if nextMsg == nil {
+				continue
+			}
+			if nextMsg.Role != schema.Tool {
+				break
+			}
+
+			toolCallID := strings.TrimSpace(nextMsg.ToolCallID)
+			if _, ok := pendingToolCallIDs[toolCallID]; !ok {
+				issues = append(issues, fmt.Sprintf("assistant tool_calls at #%d met unexpected tool message #%d tool_call_id=%s", i, nextIndex, toolCallID))
+				break
+			}
+
+			delete(pendingToolCallIDs, toolCallID)
+			matchedTools++
+			if len(pendingToolCallIDs) == 0 {
+				break
+			}
+		}
+
+		if len(pendingToolCallIDs) > 0 {
+			issues = append(issues, fmt.Sprintf("assistant tool_calls at #%d missing %d tool responses before next non-tool message", i, len(pendingToolCallIDs)))
+		}
+
+		if matchedTools > 0 {
+			i = nextIndex - 1
+		}
+	}
+
+	return issues
 }
 
 func (p *EinoLLMProvider) prepareToolsForBinding(tools []*schema.ToolInfo) ([]*schema.ToolInfo, map[string]string) {
