@@ -190,6 +190,27 @@ func TestDetectToolMessageSequenceIssuesFlagsMissingToolResponse(t *testing.T) {
 	require.True(t, strings.Contains(strings.Join(issues, " | "), "missing 1 tool responses"))
 }
 
+func TestDetectToolMessageSequenceIssuesAcceptsCompleteAssistantToolPair(t *testing.T) {
+	messages := []*schema.Message{
+		schema.SystemMessage("你是一个中文助手。"),
+		schema.AssistantMessage("好的，我来查询一下。", []schema.ToolCall{
+			{
+				ID:   "call_1",
+				Type: "function",
+				Function: schema.FunctionCall{
+					Name:      "search",
+					Arguments: `{"question":"桥梁数量"}`,
+				},
+			},
+		}),
+		schema.ToolMessage(`{"matched":false}`, "call_1"),
+	}
+
+	issues := detectToolMessageSequenceIssues(messages)
+
+	require.Empty(t, issues)
+}
+
 func cloneToolInfos(tools []*schema.ToolInfo) []*schema.ToolInfo {
 	if len(tools) == 0 {
 		return nil

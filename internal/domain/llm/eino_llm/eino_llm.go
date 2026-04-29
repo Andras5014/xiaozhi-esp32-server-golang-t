@@ -664,6 +664,11 @@ func detectToolMessageSequenceIssues(messages []*schema.Message) []string {
 			issues = append(issues, fmt.Sprintf("assistant tool_calls at #%d missing %d tool responses before next non-tool message", i, len(pendingToolCallIDs)))
 		}
 
+		if len(pendingToolCallIDs) == 0 {
+			i = nextIndex
+			continue
+		}
+
 		if matchedTools > 0 {
 			i = nextIndex - 1
 		}
